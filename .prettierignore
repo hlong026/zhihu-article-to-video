@@ -1,0 +1,6 @@
+node_modules/
+dist/
+coverage/
+apps/desktop/out/
+apps/desktop/.stage/
+packages/pipeline/dist-test/

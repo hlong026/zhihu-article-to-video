@@ -1,0 +1,17 @@
+{
+  "name": "@zhihu-video/pipeline",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsc -p tsconfig.test.json && node dist-test/tests/run.js"
+  },
+  "dependencies": {
+    "sharp": "^0.35.3"
+  }
+}

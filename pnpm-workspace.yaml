@@ -1,0 +1,13 @@
+packages:
+  - apps/*
+  - packages/*
+
+overrides:
+  "@types/node": 22.20.1
+allowBuilds:
+  better-sqlite3: true
+  esbuild: true
+
+# CI installs are explicit. Native-module rebuilds must not trigger pnpm to
+# replace the development dependency set while a packaging script is running.
+verifyDepsBeforeRun: false

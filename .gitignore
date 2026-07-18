@@ -1,0 +1,17 @@
+node_modules/
+.pnpm-store/
+.DS_Store
+dist/
+coverage/
+playwright-report/
+test-results/
+apps/desktop/out/
+apps/desktop/.stage/
+packages/pipeline/dist-test/
+data/
+outputs/
+logs/
+.env
+.env.*
+!.env.example
+*.sqlite

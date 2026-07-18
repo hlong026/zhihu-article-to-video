@@ -1,0 +1,26 @@
+{
+  "name": "@zhihu-video/desktop",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "dist/main.js",
+  "dependencies": {
+    "@zhihu-video/contracts": "workspace:*"
+  },
+  "scripts": {
+    "dev": "pnpm run build && electron .",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepare-runtime": "node scripts/install-runtime.mjs",
+    "rebuild-native": "electron-rebuild --force --only better-sqlite3,sharp --module-dir ../api",
+    "package": "pnpm --filter @zhihu-video/api build && pnpm --filter @zhihu-video/web build && pnpm run rebuild-native && pnpm run build && pnpm run prepare-runtime && node scripts/package-desktop.mjs && pnpm --filter @zhihu-video/api rebuild better-sqlite3",
+    "package:win32": "pnpm --filter @zhihu-video/api build && pnpm --filter @zhihu-video/web build && pnpm run rebuild-native && pnpm run build && node scripts/package-desktop.mjs --platform=win32 --arch=x64",
+    "make": "pnpm run package"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.2.0",
+    "electron": "latest",
+    "tsx": "latest",
+    "typescript": "^5.7.3"
+  }
+}

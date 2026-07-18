@@ -1,0 +1,91 @@
+name: 打包桌面应用
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: ${{ matrix.name }} 桌面应用
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            platform: macos
+            runner: macos-latest
+            command: pnpm desktop:make
+            artifact_name: zhihu-article-to-video-macos
+            artifact_path: apps/desktop/out/darwin/ZhihuArticleToVideo-macos-arm64.zip
+          - name: Windows
+            platform: windows
+            runner: windows-latest
+            command: pnpm desktop:make:win32
+            artifact_name: zhihu-article-to-video-windows
+            artifact_path: apps/desktop/out/win32/ZhihuArticleToVideo-win32-x64.zip
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.14.1
+          cache: pnpm
+
+      - name: 启用 Corepack
+        run: corepack enable
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile --prod=false
+
+      - name: 打包
+        run: ${{ matrix.command }}
+
+      - name: 压缩 macOS 应用
+        if: matrix.platform == 'macos'
+        run: >-
+          ditto -c -k --keepParent
+          apps/desktop/out/darwin/ZhihuArticleToVideo.app
+          ${{ matrix.artifact_path }}
+
+      - name: 上传安装包
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_path }}
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: 创建发布版本
+    needs: package
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 下载安装包
+        uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+
+      - name: 创建标签与 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(node -p "require('./apps/desktop/package.json').version")
+          tag="v${version}-build.${GITHUB_RUN_NUMBER}"
+          gh release create "$tag" release/* \
+            --target "$GITHUB_SHA" \
+            --title "$tag" \
+            --generate-notes

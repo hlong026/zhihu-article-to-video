@@ -1,0 +1,32 @@
+{
+  "name": "@zhihu-video/api",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "lint": "eslint src test --max-warnings=0"
+  },
+  "dependencies": {
+    "@fastify/multipart": "latest",
+    "@zhihu-video/contracts": "workspace:*",
+    "@zhihu-video/pipeline": "workspace:*",
+    "archiver": "^8.0.0",
+    "better-sqlite3": "latest",
+    "exceljs": "latest",
+    "fastify": "latest",
+    "playwright-core": "^1.61.1",
+    "zod": "latest"
+  },
+  "devDependencies": {
+    "@types/archiver": "^8.0.0",
+    "@types/better-sqlite3": "latest",
+    "eslint": "latest",
+    "tsx": "latest",
+    "typescript-eslint": "latest",
+    "vitest": "latest"
+  }
+}

@@ -1,0 +1,77 @@
+import {
+  titleAndTagsJsonSchema,
+  type SummaryGenerator,
+} from "@zhihu-video/pipeline";
+
+export class AiConfigurationError extends Error {}
+
+const defaultAiBaseUrl = "https://api.deepseek.com";
+const defaultAiModel = "deepseek-v4-flash";
+
+export class OpenAiCompatibleSummaryGenerator implements SummaryGenerator {
+  constructor(private readonly configuration = readAiConfiguration()) {}
+
+  async summarize(input: {
+    sourceTitle: string;
+    paragraphs: string[];
+  }): Promise<unknown> {
+    if (!this.configuration)
+      throw new AiConfigurationError(
+        "未配置 AI_API_KEY、AI_BASE_URL 或 AI_MODEL。",
+      );
+    const response = await fetch(
+      `${this.configuration.baseUrl}/chat/completions`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${this.configuration.apiKey}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model: this.configuration.model,
+          messages: [
+            {
+              role: "system",
+              content:
+                "你是中文内容编辑。仅依据原文输出符合 schema 的 JSON：videoTitle 是不超过 22 个字符的短视频标题，tags 是 2 到 5 个内容标签。不得补充原文没有的事实。",
+            },
+            {
+              role: "user",
+              content: JSON.stringify({
+                sourceTitle: input.sourceTitle,
+                paragraphs: input.paragraphs,
+                schema: titleAndTagsJsonSchema,
+              }),
+            },
+          ],
+          response_format: { type: "json_object" },
+          temperature: 0.2,
+        }),
+      },
+    );
+    if (!response.ok)
+      throw new Error(`AI 服务请求失败（HTTP ${response.status}）。`);
+    const payload = (await response.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+    };
+    const content = payload.choices?.[0]?.message?.content;
+    if (!content) throw new Error("AI 服务未返回标题与标签内容。");
+    return JSON.parse(content) as unknown;
+  }
+}
+
+export function readAiConfiguration(environment = process.env): {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+} | null {
+  const apiKey = environment.AI_API_KEY?.trim();
+  if (!apiKey) return null;
+
+  return {
+    baseUrl:
+      environment.AI_BASE_URL?.trim().replace(/\/$/, "") ?? defaultAiBaseUrl,
+    apiKey,
+    model: environment.AI_MODEL?.trim() || defaultAiModel,
+  };
+}
