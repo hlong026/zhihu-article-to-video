@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "pnpm --parallel --filter @zhihu-video/api --filter @zhihu-video/web dev",
     "desktop:dev": "pnpm --filter @zhihu-video/api build && pnpm --filter @zhihu-video/web build && pnpm --filter @zhihu-video/desktop dev",
-    "desktop:make": "pnpm --filter @zhihu-video/api build && pnpm --filter @zhihu-video/web build && pnpm --filter @zhihu-video/desktop make",
+    "desktop:make": "pnpm --filter @zhihu-video/api... build && pnpm --filter @zhihu-video/web... build && pnpm --filter @zhihu-video/desktop make",
     "desktop:make:win32": "pnpm --filter @zhihu-video/desktop package:win32",
     "build": "pnpm --recursive --if-present run build",
     "typecheck": "pnpm --recursive --if-present run typecheck",
