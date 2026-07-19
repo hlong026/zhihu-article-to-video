@@ -32,14 +32,14 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+
       - name: 设置 Node.js 24
         uses: actions/setup-node@v4
         with:
           node-version: 24.14.1
           cache: pnpm
-
-      - name: 启用 Corepack
-        run: corepack enable
 
       - name: 安装依赖
         run: pnpm install --frozen-lockfile --prod=false
