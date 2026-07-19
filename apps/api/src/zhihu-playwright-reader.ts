@@ -74,6 +74,8 @@ interface SelectorConfig {
   titleSelectors: string[];
   /** Author-card scope candidates; the first match wins. */
   authorSelectors: string[];
+  /** Hydrated elements required before the page snapshot is evaluated. */
+  metadataWaitSelectors?: string[];
   /** Answer pages expose question counters in the question header. */
   questionCounters: boolean;
 }
@@ -82,6 +84,7 @@ const ARTICLE_SELECTORS: SelectorConfig = {
   contentSelectors: [".Post-RichText", "article"],
   titleSelectors: ["h1.Post-Title", ".Post-Title"],
   authorSelectors: [".Post-Author .AuthorInfo", ".AuthorInfo"],
+  metadataWaitSelectors: [".Post-Author .AuthorInfo-name"],
   questionCounters: false,
 };
 
@@ -89,9 +92,15 @@ const ANSWER_SELECTORS: SelectorConfig = {
   contentSelectors: [".RichContent-inner", "[itemprop='text']", "article"],
   titleSelectors: [".QuestionHeader-title", "h1"],
   authorSelectors: [
+    "[itemprop='mainEntityOfPage'] .AuthorInfo",
+    ".AnswerItem-authorInfo .AuthorInfo",
     ".AnswerCard .AuthorInfo",
     ".QuestionAnswer-content .AuthorInfo",
     ".AuthorInfo",
+  ],
+  metadataWaitSelectors: [
+    ".AnswerItem .AuthorInfo-name, .AnswerItem meta[itemprop='name']",
+    ".QuestionFollowStatus .NumberBoard-itemValue, .ViewAll-QuestionMainAction",
   ],
   questionCounters: true,
 };
@@ -120,6 +129,7 @@ export function extractInPage(
     title: string;
     body: SnapshotElement | null;
     querySelector(selector: string): SnapshotElement | null;
+    querySelectorAll(selector: string): ArrayLike<SnapshotElement>;
   }
 
   const emptyMeta = {
@@ -188,18 +198,46 @@ export function extractInPage(
   }
   if (authorScope) {
     const nameElement = authorScope.querySelector(".AuthorInfo-name");
-    const name = (nameElement?.innerText ?? nameElement?.textContent ?? "")
+    const nameMeta = authorScope.querySelector("meta[itemprop='name']");
+    const name = (
+      nameElement?.innerText ??
+      nameElement?.textContent ??
+      nameMeta?.getAttribute("content") ??
+      ""
+    )
+      .replace(/[\u200B-\u200D\uFEFF]/g, "")
       .replace(/\s+/g, " ")
       .trim();
     authorName = name || null;
     const badgeElement = authorScope.querySelector(".AuthorInfo-badgeText");
-    const badge = (badgeElement?.innerText ?? badgeElement?.textContent ?? "")
+    const detailElement = authorScope.querySelector(".AuthorInfo-detail");
+    const badge = (
+      badgeElement?.innerText ??
+      badgeElement?.textContent ??
+      detailElement?.innerText ??
+      detailElement?.textContent ??
+      ""
+    )
+      .replace(/[\u200B-\u200D\uFEFF]/g, "")
       .replace(/\s+/g, " ")
       .trim();
     authorBadge = badge || null;
     const avatarElement = authorScope.querySelector("img.AuthorInfo-avatar");
-    const avatarSource = avatarElement?.getAttribute("src")?.trim() ?? "";
-    avatarUrl = avatarSource.startsWith("https:") ? avatarSource : null;
+    const avatarMeta = authorScope.querySelector("meta[itemprop='image']");
+    const avatarSrcset = avatarElement?.getAttribute("srcset")?.trim() ?? "";
+    const avatarSource = (
+      avatarElement?.getAttribute("src") ??
+      avatarElement?.getAttribute("data-original") ??
+      avatarElement?.getAttribute("data-src") ??
+      avatarSrcset.split(",")[0]?.trim().split(/\s+/)[0] ??
+      avatarMeta?.getAttribute("content") ??
+      ""
+    ).trim();
+    avatarUrl = avatarSource.startsWith("//")
+      ? `https:${avatarSource}`
+      : avatarSource.startsWith("https:")
+        ? avatarSource
+        : null;
   }
 
   // Question counters only exist on answer pages (the question header).
@@ -218,21 +256,39 @@ export function extractInPage(
       const match = /(\d[\d.,]*\s*万?)\s*个回答/.exec(viewAllText);
       if (match?.[1]) answerCount = match[1].replace(/\s+/g, "");
     }
-    const followElement = doc.querySelector(
-      ".QuestionFollowStatus .NumberBoard-itemValue",
-    );
-    const followTitle = followElement?.getAttribute("title")?.trim() ?? "";
-    if (followTitle) {
-      followCount = followTitle;
-    } else {
-      const followText = (
+    for (const item of Array.from(
+      doc.querySelectorAll(".QuestionFollowStatus .NumberBoard-item"),
+    )) {
+      const labelElement = item.querySelector(".NumberBoard-itemName");
+      const label = (labelElement?.innerText ?? labelElement?.textContent ?? "")
+        .replace(/\s+/g, " ")
+        .trim();
+      if (!label.includes("关注")) continue;
+      const valueElement = item.querySelector(".NumberBoard-itemValue");
+      const value = (
+        valueElement?.getAttribute("title") ??
+        valueElement?.innerText ??
+        valueElement?.textContent ??
+        ""
+      )
+        .replace(/\s+/g, " ")
+        .trim();
+      followCount = value || null;
+      break;
+    }
+    if (!followCount) {
+      const followElement = doc.querySelector(
+        ".QuestionFollowStatus .NumberBoard-itemValue",
+      );
+      const followValue = (
+        followElement?.getAttribute("title") ??
         followElement?.innerText ??
         followElement?.textContent ??
         ""
       )
         .replace(/\s+/g, " ")
         .trim();
-      followCount = followText || null;
+      followCount = followValue || null;
     }
   }
 
@@ -403,16 +459,21 @@ export class PlaywrightZhihuContentReader implements ZhihuContentReader {
         waitUntil: "domcontentloaded",
         timeout: this.navigationTimeoutMs,
       });
-      // Content renders after the initial HTML; wait briefly but continue
-      // anyway so risk-control pages are classified by their visible text.
-      await page
-        .waitForSelector(CONTENT_WAIT_SELECTOR, { timeout: 8_000 })
-        .catch(() => undefined);
+      const selectors = selectorsFor(source.sourceType);
+      // Content and header metadata hydrate independently. Waiting in parallel
+      // avoids adding serial latency while ensuring the cover sees both blocks.
+      await Promise.all([
+        page
+          .waitForSelector(CONTENT_WAIT_SELECTOR, { timeout: 8_000 })
+          .catch(() => undefined),
+        ...(selectors.metadataWaitSelectors ?? []).map((selector) =>
+          page
+            .waitForSelector(selector, { timeout: 3_000 })
+            .catch(() => undefined),
+        ),
+      ]);
 
-      const snapshot = await page.evaluate(
-        extractInPage,
-        selectorsFor(source.sourceType),
-      );
+      const snapshot = await page.evaluate(extractInPage, selectors);
       const result = interpretPageSnapshot({
         ...snapshot,
         url: page.url(),

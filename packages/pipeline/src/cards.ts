@@ -69,8 +69,8 @@ export function buildCardSequence(
   }
 
   const totalPages = summary.pages.length + 2;
-  // The cover echoes the article's opening lines (like a Zhihu card) so it is
-  // not a near-empty title screen; the body pages then continue the read.
+  // The cover mirrors the source page: original question/article title first,
+  // then its opening lines. The AI title remains useful for task/file naming.
   const previewLines = (summary.pages[0]?.body.split("\n") ?? [])
     .filter((line) => line !== "")
     .slice(0, 6);
@@ -80,11 +80,11 @@ export function buildCardSequence(
     pageNumber: 1,
     totalPages,
     sourceLabel: "知乎",
-    title: summary.videoTitle,
+    title: summary.sourceTitle,
     tags: summary.tags,
     preview: previewLines,
     meta: summary.coverMeta ?? null,
-    text: summary.videoTitle,
+    text: summary.sourceTitle,
   };
   const bodyCards: BodyCardRenderModel[] = summary.pages.map((page, index) => ({
     kind: "body",

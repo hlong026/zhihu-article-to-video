@@ -129,7 +129,7 @@ export async function writeSummaryPngCards(
 function renderCover(
   card: Extract<CardRenderModel, { kind: "cover" }>,
 ): string {
-  const titleLines = wrapText(card.title, 14, 2);
+  const titleLines = wrapText(card.title, 14, 3);
   const metaLine = coverMetaLine(card);
   const metaY = 240 + titleLines.length * 96 + 40;
   const parts = [
@@ -170,7 +170,9 @@ function renderCover(
 }
 
 /** "知乎 · N 个回答 · M 关注" when counters exist, else the tags line. */
-function coverMetaLine(card: Extract<CardRenderModel, { kind: "cover" }>): string {
+function coverMetaLine(
+  card: Extract<CardRenderModel, { kind: "cover" }>,
+): string {
   const segments: string[] = [card.sourceLabel];
   if (card.meta?.answerCount?.trim()) {
     segments.push(`${card.meta.answerCount.trim()} 个回答`);
@@ -181,9 +183,7 @@ function coverMetaLine(card: Extract<CardRenderModel, { kind: "cover" }>): strin
   if (segments.length === 1) {
     segments.push(...card.tags);
   }
-  return segments
-    .filter((item) => item.trim().length > 0)
-    .join(" · ");
+  return segments.filter((item) => item.trim().length > 0).join(" · ");
 }
 
 /** Zhihu-style author row: 88px avatar, name/badge, decorative follow pill. */

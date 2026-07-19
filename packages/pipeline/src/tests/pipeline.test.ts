@@ -414,7 +414,7 @@ export async function runPipelineTests(): Promise<void> {
   const svgCards = renderSummarySvgCards(
     {
       ...validSummary,
-      videoTitle: "标题 & <正文>",
+      sourceTitle: "标题 & <正文>",
       pages: [
         {
           ...validSummary.pages[0]!,
@@ -475,6 +475,16 @@ export async function runPipelineTests(): Promise<void> {
     metaCover.meta,
     metaSummary.coverMeta,
     "cover card should carry the question-header metadata",
+  );
+  equal(
+    metaCover.title,
+    metaSummary.sourceTitle,
+    "cover should use the original Zhihu question title",
+  );
+  equal(
+    metaCover.text,
+    metaSummary.sourceTitle,
+    "cover text should preserve the original Zhihu question title",
   );
   const metaCoverSvg = renderSummarySvgCards(metaSummary, "三个方法")[0];
   equal(

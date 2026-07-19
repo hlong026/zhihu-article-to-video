@@ -2,12 +2,38 @@ import { describe, expect, it } from "vitest";
 import type { BrowserContext } from "playwright-core";
 
 import {
+  extractInPage,
   interpretPageSnapshot,
   PlaywrightZhihuContentReader,
   readBrowserConfiguration,
   type PageMetaSnapshot,
   type PageSnapshot,
 } from "../src/zhihu-playwright-reader.js";
+
+interface FakeElementOptions {
+  text?: string;
+  attributes?: Record<string, string>;
+  selectors?: Record<string, FakeElement | null>;
+  selectorLists?: Record<string, FakeElement[]>;
+}
+
+interface FakeElement {
+  innerText: string;
+  textContent: string;
+  getAttribute(name: string): string | null;
+  querySelector(selector: string): FakeElement | null;
+  querySelectorAll(selector: string): FakeElement[];
+}
+
+function fakeElement(options: FakeElementOptions = {}): FakeElement {
+  return {
+    innerText: options.text ?? "",
+    textContent: options.text ?? "",
+    getAttribute: (name) => options.attributes?.[name] ?? null,
+    querySelector: (selector) => options.selectors?.[selector] ?? null,
+    querySelectorAll: (selector) => options.selectorLists?.[selector] ?? [],
+  };
+}
 
 function emptyPageMeta(): PageMetaSnapshot {
   return {
@@ -198,6 +224,102 @@ describe("interpretPageSnapshot", () => {
   });
 });
 
+describe("extractInPage", () => {
+  it("extracts the complete current answer header for the cover", () => {
+    const content = fakeElement({
+      selectorLists: {
+        p: [
+          fakeElement({
+            text: "第一段足够长的正文内容，用于验证当前知乎回答页结构。",
+          }),
+        ],
+      },
+    });
+    const author = fakeElement({
+      selectors: {
+        ".AuthorInfo-name": null,
+        "meta[itemprop='name']": fakeElement({
+          attributes: { content: "摸鱼作家\u200B" },
+        }),
+        ".AuthorInfo-badgeText": null,
+        ".AuthorInfo-detail": fakeElement({
+          text: "互联网行业 软件工程师",
+        }),
+        "img.AuthorInfo-avatar": fakeElement({
+          attributes: { src: "//pic1.zhimg.com/v2-avatar_l.jpg" },
+        }),
+      },
+    });
+    const viewed = fakeElement({
+      selectors: {
+        ".NumberBoard-itemName": fakeElement({ text: "被浏览" }),
+        ".NumberBoard-itemValue": fakeElement({
+          text: "9,999",
+          attributes: { title: "9999" },
+        }),
+      },
+    });
+    const followers = fakeElement({
+      selectors: {
+        ".NumberBoard-itemName": fakeElement({ text: "关注者" }),
+        ".NumberBoard-itemValue": fakeElement({
+          text: "623",
+          attributes: { title: "623" },
+        }),
+      },
+    });
+    const documentSelectors: Record<string, FakeElement | null> = {
+      ".RichContent-inner": content,
+      ".QuestionHeader-title": fakeElement({
+        text: "为什么用 AI 写代码之后，人反而越来越累了？",
+      }),
+      "[itemprop='mainEntityOfPage'] .AuthorInfo": author,
+      "meta[itemprop='answerCount']": null,
+      ".ViewAll-QuestionMainAction": fakeElement({
+        text: "查看全部 278 个回答",
+      }),
+      ".QuestionFollowStatus .NumberBoard-itemValue": viewed.querySelector(
+        ".NumberBoard-itemValue",
+      ),
+    };
+    const fakeDocument = {
+      title: "为什么用 AI 写代码之后，人反而越来越累了？ - 知乎",
+      body: fakeElement({ text: "知乎回答正文" }),
+      querySelector: (selector: string) => documentSelectors[selector] ?? null,
+      querySelectorAll: (selector: string) =>
+        selector === ".QuestionFollowStatus .NumberBoard-item"
+          ? [viewed, followers]
+          : [],
+    };
+    const hadDocument = Reflect.has(globalThis, "document");
+    const originalDocument = Reflect.get(globalThis, "document");
+    Reflect.set(globalThis, "document", fakeDocument);
+
+    try {
+      expect(
+        extractInPage({
+          contentSelectors: [".RichContent-inner"],
+          titleSelectors: [".QuestionHeader-title"],
+          authorSelectors: ["[itemprop='mainEntityOfPage'] .AuthorInfo"],
+          questionCounters: true,
+        }),
+      ).toMatchObject({
+        contentTitle: "为什么用 AI 写代码之后，人反而越来越累了？",
+        meta: {
+          authorName: "摸鱼作家",
+          authorBadge: "互联网行业 软件工程师",
+          answerCount: "278",
+          followCount: "623",
+          avatarUrl: "https://pic1.zhimg.com/v2-avatar_l.jpg",
+        },
+      });
+    } finally {
+      if (hadDocument) Reflect.set(globalThis, "document", originalDocument);
+      else Reflect.deleteProperty(globalThis, "document");
+    }
+  });
+});
+
 describe("readBrowserConfiguration", () => {
   it("defaults to the real Chrome channel in headless-first mode", () => {
     expect(readBrowserConfiguration({} as NodeJS.ProcessEnv)).toEqual({
@@ -307,7 +429,11 @@ function createFakeLauncher(pages: FakePageBehavior[]) {
 
 function createReader(
   fake: ReturnType<typeof createFakeLauncher>,
-  overrides: { headless?: boolean; minIntervalMs?: number; onEscalate?: (reason: string) => void } = {},
+  overrides: {
+    headless?: boolean;
+    minIntervalMs?: number;
+    onEscalate?: (reason: string) => void;
+  } = {},
 ) {
   return new PlaywrightZhihuContentReader({
     sessionDirectory: "/tmp/zhihu-reader-test",
