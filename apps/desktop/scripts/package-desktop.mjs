@@ -80,11 +80,11 @@ const FFMPEG_ARCHIVE_NAME = {
   "darwin-arm64": "ffmpeg-master-latest-macos-arm64-gpl.zip",
 };
 
-/** 解压后 ffmpeg 二进制在压缩包内的相对路径。 */
+/** 解压后 ffmpeg 二进制在压缩包内的相对路径（BtbN 包带顶层目录）。 */
 const FFMPEG_BINARY_IN_ARCHIVE = {
-  "win32-x64": "bin/ffmpeg.exe",
-  "darwin-x64": "bin/ffmpeg",
-  "darwin-arm64": "bin/ffmpeg",
+  "win32-x64": "ffmpeg-master-latest-win64-gpl/bin/ffmpeg.exe",
+  "darwin-x64": "ffmpeg-master-latest-macos64-gpl/bin/ffmpeg",
+  "darwin-arm64": "ffmpeg-master-latest-macos-arm64-gpl/bin/ffmpeg",
 };
 
 function argValue(name) {
@@ -539,6 +539,23 @@ async function findMakensis() {
     await run("makensis", ["-VERSION"], { maxBuffer: 1024 * 1024 });
     return "makensis";
   } catch {
+    // PATH 中没有时，探测常见安装位置（NSIS 默认装于 Program Files (x86)，
+    // 安装程序不会自动将其加入 PATH）。
+    const candidates = [
+      join(
+        process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)",
+        "NSIS",
+        "makensis.exe",
+      ),
+      join(
+        process.env.ProgramFiles ?? "C:\\Program Files",
+        "NSIS",
+        "makensis.exe",
+      ),
+    ];
+    for (const candidate of candidates) {
+      if (existsSync(candidate)) return candidate;
+    }
     return null;
   }
 }
