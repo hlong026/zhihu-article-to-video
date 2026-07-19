@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu } from "electron";
 import { writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -365,6 +365,9 @@ function getApiModulePath(): string {
 app
   .whenReady()
   .then(async () => {
+    // Remove the default application menu (File/Edit/View/...) on Windows.
+    Menu.setApplicationMenu(null);
+
     localApi = await createDesktopApi({
       appDataDirectory: app.getPath("userData"),
       apiModulePath: getApiModulePath(),
