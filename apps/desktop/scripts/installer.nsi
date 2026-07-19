@@ -90,9 +90,7 @@ Function .onInit
 
     ; 版本不同则提示升级/降级信息
     ${If} $InstalledVersion != "${VERSION}"
-      MessageBox MB_OKCANCEL|MB_ICONINFORMATION \
-        "检测到已安装版本 $InstalledVersion。$\r$\n$\r$\n即将安装版本 ${VERSION}。$\r$\n$\r$\n您的任务数据和生成产物不会受到影响。$\r$\n$\r$\n点击"确定"继续，"取消"退出。" \
-        IDOK doContinue
+      MessageBox MB_OKCANCEL|MB_ICONINFORMATION "检测到已安装版本 $InstalledVersion。$\r$\n$\r$\n即将安装版本 ${VERSION}。$\r$\n$\r$\n您的任务数据和生成产物不会受到影响。$\r$\n$\r$\n点击“确定”继续，“取消”退出。" IDOK doContinue
       Abort
       doContinue:
     ${EndIf}
@@ -159,8 +157,7 @@ Section "Uninstall"
   DeleteRegKey HKLM "${UNINST_REG_KEY}"
 
   ; 提示用户数据保留位置
-  MessageBox MB_OK|MB_ICONINFORMATION \
-    "程序已卸载。$\r$\n$\r$\n您的任务数据仍保留在：$\r$\n%APPDATA%\${PRODUCT_NAME}$\r$\n$\r$\n如不再需要，可手动删除该文件夹。"
+  MessageBox MB_OK|MB_ICONINFORMATION "程序已卸载。$\r$\n$\r$\n您的任务数据仍保留在：$\r$\n%APPDATA%\${PRODUCT_NAME}$\r$\n$\r$\n如不再需要，可手动删除该文件夹。"
 SectionEnd
 
 ; ─── 卸载时关闭进程 ─────────────────────────────────────────────────────────
