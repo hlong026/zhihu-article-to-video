@@ -185,6 +185,17 @@ function registerIpcHandlers(): void {
     },
   );
 
+  ipcMain.handle(
+    "desktop:stream-task-video",
+    async (_event, taskId: unknown) => {
+      if (typeof taskId !== "string" || taskId.length === 0) {
+        throw new Error("任务参数无效。");
+      }
+      const asset = await requireApi().downloadVideo(taskId);
+      return { contentType: "video/mp4", contents: asset.contents };
+    },
+  );
+
   ipcMain.handle("desktop:download-video", async (_event, taskId: unknown) => {
     if (typeof taskId !== "string" || taskId.length === 0) {
       throw new Error("任务参数无效。");

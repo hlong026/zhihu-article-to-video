@@ -38,6 +38,8 @@ contextBridge.exposeInMainWorld("desktop", {
     ipcRenderer.invoke("desktop:delete-batch", batchId),
   taskPreviewImage: (taskId: string) =>
     ipcRenderer.invoke("desktop:task-preview-image", taskId),
+  streamTaskVideo: (taskId: string) =>
+    ipcRenderer.invoke("desktop:stream-task-video", taskId),
   downloadVideo: (taskId: string): Promise<string | null> =>
     ipcRenderer.invoke("desktop:download-video", taskId),
   downloadImages: (taskId: string): Promise<string | null> =>

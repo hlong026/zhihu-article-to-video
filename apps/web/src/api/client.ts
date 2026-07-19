@@ -491,6 +491,23 @@ export const apiClient = {
   },
 
   /**
+   * Resolves a playable video source URL. Web builds point at the streaming
+   * endpoint; desktop receives the bytes over IPC and wraps them in an object
+   * URL the caller must revoke.
+   */
+  async getVideoSource(taskId: string): Promise<string | null> {
+    if (useMockApi) return null;
+    if (window.desktop) {
+      const asset = await window.desktop.streamTaskVideo(taskId);
+      const blob = new Blob([asset.contents as BlobPart], {
+        type: asset.contentType,
+      });
+      return URL.createObjectURL(blob);
+    }
+    return `${apiBaseUrl}/api/tasks/${taskId}/download/video`;
+  },
+
+  /**
    * Resolves a displayable cover-image URL for a task. Web builds point at the
    * streaming endpoint (cache-busted after re-renders); desktop receives the
    * bytes over IPC and wraps them in an object URL the caller must revoke.

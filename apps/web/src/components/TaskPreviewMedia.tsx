@@ -71,17 +71,26 @@ interface CompletedPreviewProps {
 
 /** Shows a cover poster with a play button; clicking starts video playback. */
 function CompletedPreview({ task, artifacts, canStreamVideo }: CompletedPreviewProps) {
-  const [isPlaying, setIsPlaying] = useState(false);
+  const [videoSrc, setVideoSrc] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const objectUrlRef = useRef<string | null>(null);
 
   // Reset play state when switching tasks
   useEffect(() => {
-    setIsPlaying(false);
+    setVideoSrc(null);
+    setIsLoading(false);
+    return () => {
+      if (objectUrlRef.current) {
+        URL.revokeObjectURL(objectUrlRef.current);
+        objectUrlRef.current = null;
+      }
+    };
   }, [task.id, task.updatedAt]);
 
   // Autoplay once the video element is mounted and has enough data
   useEffect(() => {
-    if (!isPlaying) return;
+    if (!videoSrc) return;
     const video = videoRef.current;
     if (!video) return;
     if (video.readyState >= 3) {
@@ -91,15 +100,25 @@ function CompletedPreview({ task, artifacts, canStreamVideo }: CompletedPreviewP
       video.addEventListener("canplay", onCanPlay, { once: true });
       return () => video.removeEventListener("canplay", onCanPlay);
     }
-  }, [isPlaying]);
+  }, [videoSrc]);
 
-  function handlePlayClick() {
-    setIsPlaying(true);
+  async function handlePlayClick() {
+    if (isLoading) return;
+    setIsLoading(true);
+    try {
+      const src = await apiClient.getVideoSource(task.id);
+      if (src?.startsWith("blob:")) {
+        objectUrlRef.current = src;
+      }
+      setVideoSrc(src);
+    } catch {
+      setIsLoading(false);
+    }
   }
 
   return (
     <div className="preview-media">
-      {isPlaying && canStreamVideo ? (
+      {videoSrc ? (
         <video
           ref={videoRef}
           key={`${task.id}-${task.updatedAt}`}
@@ -107,7 +126,7 @@ function CompletedPreview({ task, artifacts, canStreamVideo }: CompletedPreviewP
           controls
           autoPlay
           preload="metadata"
-          src={apiClient.getDownloadUrl(task.id, "video")}
+          src={videoSrc}
         />
       ) : canStreamVideo ? (
         <div
@@ -139,7 +158,7 @@ function CompletedPreview({ task, artifacts, canStreamVideo }: CompletedPreviewP
         <p className="preview-media-meta">
           共 {artifacts.imageCount} 页 · 约{" "}
           {formatDuration(artifacts.durationSeconds)}
-          {artifacts.videoReady && !isPlaying ? " · 点击播放预览" : ""}
+          {artifacts.videoReady && !videoSrc ? " · 点击播放预览" : ""}
         </p>
       ) : null}
     </div>

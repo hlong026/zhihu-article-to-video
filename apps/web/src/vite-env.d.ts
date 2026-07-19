@@ -50,6 +50,11 @@ declare global {
         contentType: string;
         contents: Uint8Array;
       }>;
+      /** Returns the rendered video's bytes for in-app playback. */
+      streamTaskVideo(taskId: string): Promise<{
+        contentType: string;
+        contents: Uint8Array;
+      }>;
       /** Opens a save dialog and writes the asset; null when cancelled. */
       downloadVideo(taskId: string): Promise<string | null>;
       downloadImages(taskId: string): Promise<string | null>;
