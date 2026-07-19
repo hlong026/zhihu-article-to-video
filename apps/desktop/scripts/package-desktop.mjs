@@ -11,7 +11,7 @@ import {
 } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 
 const require = createRequire(import.meta.url);
@@ -45,6 +45,25 @@ const appVersion = require(join(desktopRoot, "package.json")).version;
  * 与宿主同平台打包时仍使用 electron-rebuild 按源码重建的版本。
  */
 const SQLITE_PREBUILD_RELEASE = "12.12.0";
+
+/**
+ * 内置 Playwright Chromium：目标机器没有 Chrome/Edge 时由应用自带浏览器
+ * 保底（browser-resolver 探测链的最后一环）。版本随 api 依赖的
+ * playwright-core（browsers.json 修订号），下载产物缓存在
+ * .stage/playwright-browsers，重复打包不重复下载。
+ */
+const PLAYWRIGHT_DOWNLOAD_HOST =
+  process.env.PLAYWRIGHT_DOWNLOAD_HOST ??
+  "https://cdn.playwright.dev/dbazure/download/playwright";
+
+// 交叉打包直下载时各目标的 CDN 压缩包名。
+const CHROMIUM_ARCHIVE_NAME = {
+  "win32-x64": "chromium-win64.zip",
+  "darwin-x64": "chromium-mac.zip",
+  "darwin-arm64": "chromium-mac-arm64.zip",
+  "linux-x64": "chromium-linux.zip",
+  "linux-arm64": "chromium-linux-arm64.zip",
+};
 
 function argValue(name) {
   const prefix = `${name}=`;
@@ -619,6 +638,7 @@ async function addApplicationResources(applicationDirectory) {
     recursive: true,
     verbatimSymlinks: true,
   });
+  await bundlePlaywrightBrowser(applicationDirectory);
   await writeFile(
     join(applicationDirectory, "package.json"),
     JSON.stringify(
@@ -632,4 +652,178 @@ async function addApplicationResources(applicationDirectory) {
       2,
     ),
   );
+}
+
+/** 从部署副本的 playwright-core 读取 Chromium 修订号（含平台覆盖）。 */
+async function chromiumRevision() {
+  const browsersJsonPath = join(
+    apiDeployment,
+    "node_modules",
+    "playwright-core",
+    "browsers.json",
+  );
+  const { browsers } = JSON.parse(await readFile(browsersJsonPath, "utf8"));
+  const chromium = browsers.find((entry) => entry.name === "chromium");
+  if (!chromium) {
+    throw new Error("playwright-core browsers.json 中缺少 chromium 定义。");
+  }
+  const overrides = chromium.revisionOverrides ?? {};
+  return (
+    overrides[`${targetPlatform}-${targetArch}`] ??
+    overrides[targetPlatform] ??
+    chromium.revision
+  );
+}
+
+/**
+ * 准备目标平台的 Chromium 浏览器目录（带本地缓存）。
+ * 返回浏览器目录与清单用的相对可执行路径。
+ */
+async function ensurePlaywrightChromium() {
+  const revision = await chromiumRevision();
+  const browserDirectoryName = `chromium-${revision}`;
+  const cacheDirectory = join(
+    stageRoot,
+    "playwright-browsers",
+    `${targetPlatform}-${targetArch}`,
+  );
+  const browserDirectory = join(cacheDirectory, browserDirectoryName);
+  // CLI 安装成功后会写入 INSTALLATION_COMPLETE 标记；直下载路径由我们补写。
+  const completionMarker = join(browserDirectory, "INSTALLATION_COMPLETE");
+  if (existsSync(completionMarker)) {
+    console.log(
+      `复用已缓存的 Playwright Chromium（${targetPlatform}-${targetArch}）。`,
+    );
+  } else {
+    await rm(cacheDirectory, { recursive: true, force: true });
+    await mkdir(browserDirectory, { recursive: true });
+    if (targetPlatform === process.platform && targetArch === process.arch) {
+      await installChromiumViaPlaywrightCli(cacheDirectory);
+    } else {
+      await downloadChromiumArchive(revision, browserDirectory);
+      await writeFile(completionMarker, "");
+    }
+  }
+  const executablePath = await findChromiumExecutable(browserDirectory);
+  const executableRelativePath =
+    `${browserDirectoryName}/` +
+    relative(browserDirectory, executablePath).split(sep).join("/");
+  return { browserDirectory, browserDirectoryName, executableRelativePath };
+}
+
+/**
+ * 在浏览器目录内定位可执行文件。Playwright 1.49+ 的 chromium 实为
+ * Chrome for Testing，目录名随平台与架构变化（chrome-win、chrome-mac、
+ * chrome-mac-arm64…），硬编码相对路径极易随版本失效，改为按形态扫描：
+ * Windows/Linux 找一级子目录下的 chrome(.exe)，macOS 找 .app 内二进制。
+ */
+async function findChromiumExecutable(browserDirectory) {
+  const candidates = [];
+  for (const entry of await readdir(browserDirectory)) {
+    const subdirectory = join(browserDirectory, entry);
+    if (targetPlatform === "win32") {
+      candidates.push(join(subdirectory, "chrome.exe"));
+    } else if (targetPlatform === "linux") {
+      candidates.push(join(subdirectory, "chrome"));
+    } else {
+      let appEntries = [];
+      try {
+        appEntries = await readdir(subdirectory);
+      } catch {
+        continue; // 文件而非目录，跳过。
+      }
+      for (const appEntry of appEntries) {
+        if (!appEntry.endsWith(".app")) continue;
+        const macosDirectory = join(
+          subdirectory,
+          appEntry,
+          "Contents",
+          "MacOS",
+        );
+        try {
+          for (const binary of await readdir(macosDirectory)) {
+            candidates.push(join(macosDirectory, binary));
+          }
+        } catch {
+          // 无 Contents/MacOS 的目录不是浏览器主体，忽略。
+        }
+      }
+    }
+  }
+  const executable = candidates.find((candidate) => existsSync(candidate));
+  if (!executable) {
+    throw new Error(`无法在 ${browserDirectory} 内定位 Chromium 可执行文件。`);
+  }
+  return executable;
+}
+
+/** 同平台构建：调用部署副本的 playwright-core CLI 下载并解压。 */
+async function installChromiumViaPlaywrightCli(browsersPath) {
+  const cliPath = join(
+    apiDeployment,
+    "node_modules",
+    "playwright-core",
+    "cli.js",
+  );
+  console.log("下载 Playwright Chromium（首次较慢，之后复用本地缓存）…");
+  // --no-shell：reader 无头与可见模式都走同一个完整 Chromium，
+  // 无需再下载 chromium-headless-shell（省约 100MB）。
+  await run(
+    process.execPath,
+    [cliPath, "install", "chromium", "--no-shell"],
+    {
+      env: { ...process.env, PLAYWRIGHT_BROWSERS_PATH: browsersPath },
+      maxBuffer: 16 * 1024 * 1024,
+    },
+  );
+}
+
+/** 交叉打包（macOS → Windows）：直接拉取 Playwright CDN 压缩包解压。 */
+async function downloadChromiumArchive(revision, targetDirectory) {
+  const archiveName = CHROMIUM_ARCHIVE_NAME[`${targetPlatform}-${targetArch}`];
+  if (!archiveName) {
+    throw new Error(
+      `缺少 ${targetPlatform}-${targetArch} 的 Chromium 压缩包映射。`,
+    );
+  }
+  const url = `${PLAYWRIGHT_DOWNLOAD_HOST}/builds/chromium/${revision}/${archiveName}`;
+  const archivePath = join(stageRoot, archiveName);
+  console.log(`下载 Playwright Chromium r${revision}（${archiveName}）…`);
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`下载 Chromium 失败（${response.status}）：${url}`);
+  }
+  await writeFile(archivePath, Buffer.from(await response.arrayBuffer()));
+  if (process.platform === "darwin") {
+    await run("ditto", ["-x", "-k", archivePath, targetDirectory]);
+  } else {
+    await run("powershell", [
+      "-NoProfile",
+      "-Command",
+      `Expand-Archive -LiteralPath '${archivePath}' -DestinationPath '${targetDirectory}'`,
+    ]);
+  }
+  await rm(archivePath, { force: true });
+}
+
+/** 将 Chromium 拷入应用包并生成 manifest（主进程据此解析可执行文件路径）。 */
+async function bundlePlaywrightBrowser(applicationDirectory) {
+  const { browserDirectory, browserDirectoryName, executableRelativePath } =
+    await ensurePlaywrightChromium();
+  const targetDirectory = join(
+    applicationDirectory,
+    "api",
+    "playwright-browsers",
+  );
+  await rm(targetDirectory, { recursive: true, force: true });
+  await mkdir(targetDirectory, { recursive: true });
+  await cp(browserDirectory, join(targetDirectory, browserDirectoryName), {
+    recursive: true,
+    verbatimSymlinks: true,
+  });
+  await writeFile(
+    join(targetDirectory, "manifest.json"),
+    `${JSON.stringify({ executableRelativePath }, null, 2)}\n`,
+  );
+  console.log(`已内置 Playwright Chromium：${browserDirectoryName}`);
 }

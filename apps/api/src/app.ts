@@ -28,6 +28,7 @@ import {
 } from "./batch-export.js";
 import { parseImportWorkbook } from "./importer.js";
 import { OpenAiCompatibleSummaryGenerator } from "./openai-summary.js";
+import { resolveBrowserLaunch } from "./browser-resolver.js";
 import {
   DEFAULT_BGM_SETTINGS,
   TaskRepository,
@@ -125,6 +126,8 @@ export interface BuildAppOptions {
     rerenderTail?(taskId: string): Promise<RerenderTailResult>;
   };
   outputDirectory?: string;
+  /** Absolute path of the Chromium executable bundled with the desktop app. */
+  bundledChromiumExecutable?: string;
 }
 
 export function buildApp(options: BuildAppOptions): FastifyInstance {
@@ -134,13 +137,39 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
   const repository = new TaskRepository(database);
   // The persistent browser profile lives next to the database so the desktop
   // app keeps the operator's Zhihu session inside its userData directory.
+  const browserConfig = readBrowserConfiguration();
+  const browserResolution = resolveBrowserLaunch({
+    explicitExecutablePath: browserConfig.executablePath,
+    explicitChannel: browserConfig.channel,
+    bundledExecutablePath:
+      options.bundledChromiumExecutable ??
+      process.env.ZHIHU_BUNDLED_CHROMIUM_EXECUTABLE?.trim() ??
+      undefined,
+  });
+  for (const warning of browserResolution.warnings) {
+    app.log.warn({ warning }, "zhihu reader browser fallback");
+  }
+  if (options.outputDirectory) {
+    app.log.info(
+      {
+        source: browserResolution.source,
+        channel: browserResolution.channel,
+        executablePath: browserResolution.executablePath,
+      },
+      "zhihu reader browser resolved",
+    );
+  }
   const contentReader = options.outputDirectory
     ? new PlaywrightZhihuContentReader({
         sessionDirectory: join(
           dirname(options.databasePath),
           "browser-session",
         ),
-        ...readBrowserConfiguration(),
+        channel: browserResolution.channel,
+        executablePath: browserResolution.executablePath,
+        headless: browserConfig.headless,
+        minIntervalMs: browserConfig.minIntervalMs,
+        interactiveWaitMs: browserConfig.interactiveWaitMs,
         onEscalate: (reason) =>
           app.log.warn(
             { reason },

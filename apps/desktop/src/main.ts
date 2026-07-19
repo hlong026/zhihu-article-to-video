@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu } from "electron";
 import { writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -362,6 +362,35 @@ function getApiModulePath(): string {
   return join(currentDirectory, "../../api/dist/src/app.js");
 }
 
+/**
+ * Locates the Chromium bundled by package-desktop.mjs. The manifest lives
+ * next to the staged API (resources/app/api/playwright-browsers) and records
+ * the executable path relative to itself; absent in dev runs, where the
+ * resolver simply falls back to locally installed browsers.
+ */
+function getBundledChromiumExecutable(): string | undefined {
+  const manifestPath = join(
+    currentDirectory,
+    "api",
+    "playwright-browsers",
+    "manifest.json",
+  );
+  try {
+    if (!existsSync(manifestPath)) return undefined;
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
+      executableRelativePath?: string;
+    };
+    if (!manifest.executableRelativePath) return undefined;
+    const executablePath = join(
+      dirname(manifestPath),
+      manifest.executableRelativePath,
+    );
+    return existsSync(executablePath) ? executablePath : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 app
   .whenReady()
   .then(async () => {
@@ -371,6 +400,7 @@ app
     localApi = await createDesktopApi({
       appDataDirectory: app.getPath("userData"),
       apiModulePath: getApiModulePath(),
+      bundledChromiumExecutable: getBundledChromiumExecutable(),
     });
     registerIpcHandlers();
     createWindow();

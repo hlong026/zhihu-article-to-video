@@ -36,6 +36,7 @@ type ApiModule = {
     databasePath: string;
     outputDirectory: string;
     logger: boolean;
+    bundledChromiumExecutable?: string;
   }): LocalFastify;
 };
 
@@ -108,6 +109,7 @@ const AUDIO_CONTENT_TYPES: Record<string, string> = {
 export async function createDesktopApi(options: {
   appDataDirectory: string;
   apiModulePath: string;
+  bundledChromiumExecutable?: string;
 }): Promise<DesktopApi> {
   const apiModule = (await import(
     pathToFileURL(options.apiModulePath).href
@@ -119,6 +121,7 @@ export async function createDesktopApi(options: {
     ),
     outputDirectory: join(options.appDataDirectory, "outputs"),
     logger: false,
+    bundledChromiumExecutable: options.bundledChromiumExecutable,
   });
 
   return {

@@ -321,9 +321,11 @@ describe("extractInPage", () => {
 });
 
 describe("readBrowserConfiguration", () => {
-  it("defaults to the real Chrome channel in headless-first mode", () => {
+  it("leaves the channel unset by default in headless-first mode", () => {
+    // resolveBrowserLaunch owns the default chrome -> msedge -> bundled
+    // fallback chain; the raw env reader must not pre-fill a channel.
     expect(readBrowserConfiguration({} as NodeJS.ProcessEnv)).toEqual({
-      channel: "chrome",
+      channel: undefined,
       executablePath: undefined,
       headless: true,
       minIntervalMs: 3_000,

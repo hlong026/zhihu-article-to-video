@@ -13,8 +13,10 @@ import type {
  * Playwright-backed Zhihu reader.
  *
  * Zhihu serves a JavaScript challenge (zse-ck) to plain HTTP clients and
- * rate-limits automated browsers at the API layer, so the reader drives a
- * real Chrome channel through a persistent, operator-owned browser profile.
+ * rate-limits automated browsers at the API layer, so the reader prefers
+ * driving a real branded browser through a persistent, operator-owned
+ * profile. The actual browser is picked upstream by resolveBrowserLaunch
+ * (local Chrome/Edge first, bundled Chromium as fallback).
  *
  * Reads start headless so batch processing never pops a window. When Zhihu
  * answers with a login / verification / risk-control wall
@@ -29,7 +31,10 @@ export interface PlaywrightReaderOptions {
   sessionDirectory: string;
   /** Playwright browser channel, e.g. "chrome". Ignored when executablePath is set. */
   channel?: string;
-  /** Explicit browser executable path, overrides the channel. */
+  /**
+   * Explicit browser executable path, overrides the channel. When neither
+   * channel nor executablePath is set, Playwright launches its own chromium.
+   */
   executablePath?: string;
   /**
    * Defaults to true: reads start headless and escalate to a visible window
@@ -457,7 +462,7 @@ export class PlaywrightZhihuContentReader implements ZhihuContentReader {
       const detail = error instanceof Error ? error.message : String(error);
       return failure(
         "NETWORK_ERROR",
-        `无法启动浏览器会话（${detail}）。请确认已安装 Chrome，或通过 ZHIHU_BROWSER_EXECUTABLE_PATH 指定浏览器路径。`,
+        `无法启动浏览器会话（${detail}）。请安装 Chrome 或 Edge，或通过 ZHIHU_BROWSER_EXECUTABLE_PATH 指定浏览器路径。`,
       );
     }
 
@@ -628,10 +633,10 @@ export class PlaywrightZhihuContentReader implements ZhihuContentReader {
       return this.options.launchPersistentContext(headless);
     }
     const { sessionDirectory, channel, executablePath } = this.options;
+    // Neither channel nor executablePath: fall through to Playwright's own
+    // chromium (PLAYWRIGHT_BROWSERS_PATH or the default download cache).
     return chromium.launchPersistentContext(sessionDirectory, {
-      ...(executablePath
-        ? { executablePath }
-        : { channel: channel ?? "chrome" }),
+      ...(executablePath ? { executablePath } : channel ? { channel } : {}),
       headless,
       viewport: { width: 1280, height: 900 },
       locale: "zh-CN",
@@ -712,7 +717,9 @@ export function readBrowserConfiguration(
   "channel" | "executablePath" | "headless" | "minIntervalMs" | "interactiveWaitMs"
 > {
   return {
-    channel: environment.ZHIHU_BROWSER_CHANNEL?.trim() || "chrome",
+    // Channel stays unset unless the operator pins one: resolveBrowserLaunch
+    // owns the default chrome -> msedge -> bundled fallback chain.
+    channel: environment.ZHIHU_BROWSER_CHANNEL?.trim() || undefined,
     executablePath:
       environment.ZHIHU_BROWSER_EXECUTABLE_PATH?.trim() || undefined,
     headless: environment.ZHIHU_BROWSER_HEADLESS?.trim()
