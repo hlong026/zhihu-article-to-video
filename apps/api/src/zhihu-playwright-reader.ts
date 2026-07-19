@@ -3,6 +3,7 @@ import { join } from "node:path";
 
 import { chromium, type BrowserContext, type Page } from "playwright-core";
 import type {
+  CleanReadableContent,
   SourceReadResult,
   ZhihuContentReader,
   ZhihuSourceType,
@@ -14,9 +15,13 @@ import type {
  * Zhihu serves a JavaScript challenge (zse-ck) to plain HTTP clients and
  * rate-limits automated browsers at the API layer, so the reader drives a
  * real Chrome channel through a persistent, operator-owned browser profile.
- * The operator signs in once inside the opened window; the session is reused
- * by later tasks. No cookies or credentials are copied into the project
- * database — everything stays inside the browser profile directory.
+ *
+ * Reads start headless so batch processing never pops a window. When Zhihu
+ * answers with a login / verification / risk-control wall
+ * (SOURCE_ACCESS_RESTRICTED), the reader reopens the same persistent profile
+ * in a visible window and retries once; the session then stays visible so
+ * the operator can sign in. No cookies or credentials are copied into the
+ * project database — everything stays inside the browser profile directory.
  */
 
 export interface PlaywrightReaderOptions {
@@ -26,11 +31,19 @@ export interface PlaywrightReaderOptions {
   channel?: string;
   /** Explicit browser executable path, overrides the channel. */
   executablePath?: string;
-  /** Headless mode is detectable by Zhihu risk control; keep it off by default. */
+  /**
+   * Defaults to true: reads start headless and escalate to a visible window
+   * only when Zhihu demands login or verification. Set false to always run
+   * a visible window (legacy behavior).
+   */
   headless?: boolean;
   /** Minimum delay between two page loads to stay below rate limits. */
   minIntervalMs?: number;
   navigationTimeoutMs?: number;
+  /** Called once whenever the reader escalates from headless to a visible window. */
+  onEscalate?: (reason: string) => void;
+  /** Test hook: replaces the Playwright launcher. Receives the headless flag. */
+  launchPersistentContext?: (headless: boolean) => Promise<BrowserContext>;
 }
 
 export interface PageSnapshot {
@@ -40,21 +53,47 @@ export interface PageSnapshot {
   bodyText: string;
   contentTitle: string | null;
   paragraphs: string[];
+  meta: PageMetaSnapshot;
+}
+
+/**
+ * Question-header metadata captured in-page for the cover card. Counts keep
+ * their original display text (e.g. "433" or "1.2万"). Every field is
+ * best-effort: a missing element yields null and the cover just skips it.
+ */
+export interface PageMetaSnapshot {
+  authorName: string | null;
+  authorBadge: string | null;
+  answerCount: string | null;
+  followCount: string | null;
+  avatarUrl: string | null;
 }
 
 interface SelectorConfig {
   contentSelectors: string[];
   titleSelectors: string[];
+  /** Author-card scope candidates; the first match wins. */
+  authorSelectors: string[];
+  /** Answer pages expose question counters in the question header. */
+  questionCounters: boolean;
 }
 
 const ARTICLE_SELECTORS: SelectorConfig = {
   contentSelectors: [".Post-RichText", "article"],
   titleSelectors: ["h1.Post-Title", ".Post-Title"],
+  authorSelectors: [".Post-Author .AuthorInfo", ".AuthorInfo"],
+  questionCounters: false,
 };
 
 const ANSWER_SELECTORS: SelectorConfig = {
   contentSelectors: [".RichContent-inner", "[itemprop='text']", "article"],
   titleSelectors: [".QuestionHeader-title", "h1"],
+  authorSelectors: [
+    ".AnswerCard .AuthorInfo",
+    ".QuestionAnswer-content .AuthorInfo",
+    ".AuthorInfo",
+  ],
+  questionCounters: true,
 };
 
 const CONTENT_WAIT_SELECTOR = ".Post-RichText, .RichContent-inner, article";
@@ -73,6 +112,8 @@ export function extractInPage(
   interface SnapshotElement {
     innerText?: string;
     textContent?: string | null;
+    getAttribute(name: string): string | null;
+    querySelector(selector: string): SnapshotElement | null;
     querySelectorAll(selector: string): ArrayLike<SnapshotElement>;
   }
   interface SnapshotDocument {
@@ -81,9 +122,23 @@ export function extractInPage(
     querySelector(selector: string): SnapshotElement | null;
   }
 
+  const emptyMeta = {
+    authorName: null,
+    authorBadge: null,
+    answerCount: null,
+    followCount: null,
+    avatarUrl: null,
+  };
+
   const doc = (globalThis as { document?: SnapshotDocument }).document;
   if (!doc) {
-    return { title: "", bodyText: "", contentTitle: null, paragraphs: [] };
+    return {
+      title: "",
+      bodyText: "",
+      contentTitle: null,
+      paragraphs: [],
+      meta: emptyMeta,
+    };
   }
 
   // NOTE: nested helpers cannot be extracted here. tsx/esbuild appends a
@@ -122,11 +177,71 @@ export function extractInPage(
     contentTitle = fallback || null;
   }
 
+  // Author card (Zhihu question-header style): name, badge and avatar.
+  let authorName: string | null = null;
+  let authorBadge: string | null = null;
+  let avatarUrl: string | null = null;
+  let authorScope: SnapshotElement | null = null;
+  for (const selector of config.authorSelectors) {
+    authorScope = doc.querySelector(selector);
+    if (authorScope) break;
+  }
+  if (authorScope) {
+    const nameElement = authorScope.querySelector(".AuthorInfo-name");
+    const name = (nameElement?.innerText ?? nameElement?.textContent ?? "")
+      .replace(/\s+/g, " ")
+      .trim();
+    authorName = name || null;
+    const badgeElement = authorScope.querySelector(".AuthorInfo-badgeText");
+    const badge = (badgeElement?.innerText ?? badgeElement?.textContent ?? "")
+      .replace(/\s+/g, " ")
+      .trim();
+    authorBadge = badge || null;
+    const avatarElement = authorScope.querySelector("img.AuthorInfo-avatar");
+    const avatarSource = avatarElement?.getAttribute("src")?.trim() ?? "";
+    avatarUrl = avatarSource.startsWith("https:") ? avatarSource : null;
+  }
+
+  // Question counters only exist on answer pages (the question header).
+  let answerCount: string | null = null;
+  let followCount: string | null = null;
+  if (config.questionCounters) {
+    const answerMeta = doc.querySelector("meta[itemprop='answerCount']");
+    const answerContent = answerMeta?.getAttribute("content")?.trim() ?? "";
+    if (answerContent) {
+      answerCount = answerContent;
+    } else {
+      const viewAll = doc.querySelector(".ViewAll-QuestionMainAction");
+      const viewAllText = (viewAll?.innerText ?? viewAll?.textContent ?? "")
+        .replace(/\s+/g, " ")
+        .trim();
+      const match = /(\d[\d.,]*\s*万?)\s*个回答/.exec(viewAllText);
+      if (match?.[1]) answerCount = match[1].replace(/\s+/g, "");
+    }
+    const followElement = doc.querySelector(
+      ".QuestionFollowStatus .NumberBoard-itemValue",
+    );
+    const followTitle = followElement?.getAttribute("title")?.trim() ?? "";
+    if (followTitle) {
+      followCount = followTitle;
+    } else {
+      const followText = (
+        followElement?.innerText ??
+        followElement?.textContent ??
+        ""
+      )
+        .replace(/\s+/g, " ")
+        .trim();
+      followCount = followText || null;
+    }
+  }
+
   return {
     title: doc.title ?? "",
     bodyText: (doc.body?.innerText ?? "").slice(0, 2000),
     contentTitle,
     paragraphs,
+    meta: { authorName, authorBadge, answerCount, followCount, avatarUrl },
   };
 }
 
@@ -183,22 +298,89 @@ export function interpretPageSnapshot(
 
   return {
     ok: true,
-    content: { title: snapshot.contentTitle, paragraphs },
+    content: {
+      title: snapshot.contentTitle,
+      paragraphs,
+      // Cover metadata is optional chrome: only present when the page
+      // actually exposed an author or question counters. The avatar data
+      // URI is filled in later by the reader's best-effort download.
+      ...(hasPageMeta(snapshot.meta)
+        ? {
+            meta: {
+              authorName: snapshot.meta.authorName,
+              authorBadge: snapshot.meta.authorBadge,
+              answerCount: snapshot.meta.answerCount,
+              followCount: snapshot.meta.followCount,
+              avatarDataUri: null,
+            },
+          }
+        : {}),
+    },
   };
+}
+
+function hasPageMeta(meta: PageMetaSnapshot): boolean {
+  return Boolean(meta.authorName ?? meta.answerCount ?? meta.followCount);
 }
 
 export class PlaywrightZhihuContentReader implements ZhihuContentReader {
   private contextPromise: Promise<BrowserContext> | null = null;
+  /** Serializes reads: one profile, one page load at a time. */
+  private queue: Promise<void> = Promise.resolve();
   private lastRequestAt = 0;
+  private headlessActive: boolean;
   private readonly minIntervalMs: number;
   private readonly navigationTimeoutMs: number;
 
   constructor(private readonly options: PlaywrightReaderOptions) {
     this.minIntervalMs = Math.max(0, options.minIntervalMs ?? 3_000);
     this.navigationTimeoutMs = options.navigationTimeoutMs ?? 30_000;
+    this.headlessActive = options.headless ?? true;
   }
 
   async read(source: {
+    sourceType: ZhihuSourceType;
+    canonicalUrl: string;
+    snapshotDir?: string;
+  }): Promise<SourceReadResult> {
+    // Serialize every read through one promise chain. Concurrent tasks share
+    // a single browser profile, and the chain doubles as the throttle mutex
+    // (page loads stay >= minIntervalMs apart even at high task concurrency)
+    // and as the mode-switch lock (only one headless -> visible escalation).
+    const run = this.queue.then(() => this.readExclusive(source));
+    this.queue = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  private async readExclusive(source: {
+    sourceType: ZhihuSourceType;
+    canonicalUrl: string;
+    snapshotDir?: string;
+  }): Promise<SourceReadResult> {
+    let result = await this.readOnce(source);
+    if (
+      !result.ok &&
+      result.failure.code === "SOURCE_ACCESS_RESTRICTED" &&
+      this.headlessActive
+    ) {
+      // Headless reading hit a login / verification / risk-control wall.
+      // Reopen the same persistent profile in a visible window and retry
+      // once; the session stays visible so the operator can sign in.
+      // Note: headless mode is more likely to be flagged by risk control and
+      // this escalation path is the designated fallback. Cookies live in the
+      // shared profile, so one visible login usually restores headless reads.
+      this.options.onEscalate?.(result.failure.message);
+      await this.closeContext();
+      this.headlessActive = false;
+      result = await this.readOnce(source);
+    }
+    return result;
+  }
+
+  private async readOnce(source: {
     sourceType: ZhihuSourceType;
     canonicalUrl: string;
     snapshotDir?: string;
@@ -237,6 +419,14 @@ export class PlaywrightZhihuContentReader implements ZhihuContentReader {
         httpStatus: response?.status() ?? 0,
       });
 
+      if (result.ok && result.content.meta && snapshot.meta.avatarUrl) {
+        const avatarDataUri = await this.downloadAvatar(
+          context,
+          snapshot.meta.avatarUrl,
+        );
+        if (avatarDataUri) result.content.meta.avatarDataUri = avatarDataUri;
+      }
+
       if (result.ok && source.snapshotDir) {
         const snapshotPath = await this.persistSnapshot(
           source.snapshotDir,
@@ -260,6 +450,15 @@ export class PlaywrightZhihuContentReader implements ZhihuContentReader {
   }
 
   async close(): Promise<void> {
+    const run = this.queue.then(() => this.closeContext());
+    this.queue = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    await run;
+  }
+
+  private async closeContext(): Promise<void> {
     if (!this.contextPromise) return;
     const context = await this.contextPromise.catch(() => null);
     this.contextPromise = null;
@@ -268,24 +467,56 @@ export class PlaywrightZhihuContentReader implements ZhihuContentReader {
 
   private ensureContext(): Promise<BrowserContext> {
     if (!this.contextPromise) {
-      const { sessionDirectory, channel, executablePath, headless } =
-        this.options;
-      this.contextPromise = chromium.launchPersistentContext(sessionDirectory, {
-        ...(executablePath
-          ? { executablePath }
-          : { channel: channel ?? "chrome" }),
-        headless: headless ?? false,
-        viewport: { width: 1280, height: 900 },
-        locale: "zh-CN",
-        timezoneId: "Asia/Shanghai",
-        args: ["--disable-blink-features=AutomationControlled"],
-      });
+      this.contextPromise = this.launchContext(this.headlessActive);
       // A failed launch must not poison later retries.
       this.contextPromise.catch(() => {
         this.contextPromise = null;
       });
     }
     return this.contextPromise;
+  }
+
+  private launchContext(headless: boolean): Promise<BrowserContext> {
+    if (this.options.launchPersistentContext) {
+      return this.options.launchPersistentContext(headless);
+    }
+    const { sessionDirectory, channel, executablePath } = this.options;
+    return chromium.launchPersistentContext(sessionDirectory, {
+      ...(executablePath
+        ? { executablePath }
+        : { channel: channel ?? "chrome" }),
+      headless,
+      viewport: { width: 1280, height: 900 },
+      locale: "zh-CN",
+      timezoneId: "Asia/Shanghai",
+      args: ["--disable-blink-features=AutomationControlled"],
+    });
+  }
+
+  /**
+   * Best-effort avatar fetch through the operator's browser session (zhimg
+   * hotlink protection expects a Zhihu referer). Failures degrade to null so
+   * the cover falls back to an initial-based placeholder.
+   */
+  private async downloadAvatar(
+    context: BrowserContext,
+    avatarUrl: string,
+  ): Promise<string | null> {
+    try {
+      const response = await context.request.get(avatarUrl, {
+        headers: { Referer: "https://www.zhihu.com/" },
+        timeout: 10_000,
+      });
+      if (!response.ok()) return null;
+      const contentType = response.headers()["content-type"] ?? "";
+      const mime = contentType.split(";")[0]?.trim() || "image/jpeg";
+      if (!mime.startsWith("image/")) return null;
+      const buffer = await response.body();
+      if (buffer.length === 0 || buffer.length > 2 * 1024 * 1024) return null;
+      return `data:${mime};base64,${buffer.toString("base64")}`;
+    } catch {
+      return null;
+    }
   }
 
   private async throttle(): Promise<void> {
@@ -299,7 +530,7 @@ export class PlaywrightZhihuContentReader implements ZhihuContentReader {
   private async persistSnapshot(
     directory: string,
     page: Page,
-    content: { title: string; paragraphs: string[] },
+    content: CleanReadableContent,
   ): Promise<string | null> {
     try {
       await mkdir(directory, { recursive: true });
@@ -311,6 +542,7 @@ export class PlaywrightZhihuContentReader implements ZhihuContentReader {
           {
             title: content.title,
             paragraphs: content.paragraphs,
+            meta: content.meta ?? null,
             fetchedAt: new Date().toISOString(),
           },
           null,
@@ -336,7 +568,9 @@ export function readBrowserConfiguration(
     channel: environment.ZHIHU_BROWSER_CHANNEL?.trim() || "chrome",
     executablePath:
       environment.ZHIHU_BROWSER_EXECUTABLE_PATH?.trim() || undefined,
-    headless: environment.ZHIHU_BROWSER_HEADLESS?.trim() === "true",
+    headless: environment.ZHIHU_BROWSER_HEADLESS?.trim()
+      ? environment.ZHIHU_BROWSER_HEADLESS.trim() === "true"
+      : true,
     minIntervalMs: Number(environment.ZHIHU_READ_MIN_INTERVAL_MS ?? 3_000),
   };
 }

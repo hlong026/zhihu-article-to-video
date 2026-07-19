@@ -7,6 +7,8 @@ import { ZipArchive } from "archiver";
 import Fastify, { type FastifyInstance } from "fastify";
 import { ZodError, z } from "zod";
 
+import type { TaskArtifactsSummary } from "@zhihu-video/contracts";
+
 import { openDatabase } from "./database.js";
 import {
   ALLOWED_AUDIO_EXTENSIONS,
@@ -32,7 +34,7 @@ import {
   type TaskDownloadInfo,
 } from "./repository.js";
 import { TaskStateError } from "./task-state.js";
-import { TaskWorker } from "./task-worker.js";
+import { TaskWorker, type RerenderTailResult } from "./task-worker.js";
 import {
   PlaywrightZhihuContentReader,
   readBrowserConfiguration,
@@ -67,12 +69,36 @@ const manualContentSchema = z
   })
   .strict();
 
+const importRangeQuerySchema = z
+  .object({
+    startRow: z.coerce.number().int().min(1).optional(),
+    endRow: z.coerce.number().int().min(1).optional(),
+  })
+  .refine(
+    (value) =>
+      value.startRow === undefined ||
+      value.endRow === undefined ||
+      value.startRow <= value.endRow,
+    { message: "导入起始条数不能大于结束条数" },
+  );
+
 const bgmUpdateSchema = z
   .object({
     enabled: z.boolean().optional(),
     presetId: z.string().trim().min(1).optional(),
     volume: z.number().min(0).max(1).optional(),
     fadeOutSeconds: z.number().min(0).max(10).optional(),
+  })
+  .strict();
+
+const processingUpdateSchema = z
+  .object({
+    concurrency: z
+      .number()
+      .int()
+      .refine((value) => [5, 10, 15, 20].includes(value), {
+        message: "并发数仅支持 5 / 10 / 15 / 20",
+      }),
   })
   .strict();
 
@@ -96,6 +122,7 @@ export interface BuildAppOptions {
   taskWorker?: {
     runBatch(batchId: string): Promise<void>;
     runTask(taskId: string): Promise<void>;
+    rerenderTail?(taskId: string): Promise<RerenderTailResult>;
   };
   outputDirectory?: string;
 }
@@ -114,6 +141,11 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
           "browser-session",
         ),
         ...readBrowserConfiguration(),
+        onEscalate: (reason) =>
+          app.log.warn(
+            { reason },
+            "zhihu reader escalated to a visible browser window",
+          ),
       })
     : null;
   const taskWorker =
@@ -128,6 +160,15 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
               repository.getBgmSettings(),
               options.databasePath,
             ),
+          resolveConcurrency: () => {
+            // TASK_CONCURRENCY overrides the stored setting (any 1-20 int);
+            // the UI offers the 5/10/15/20 presets persisted in SQLite.
+            const override = Number(process.env.TASK_CONCURRENCY);
+            if (Number.isInteger(override) && override >= 1) {
+              return Math.min(20, override);
+            }
+            return repository.getProcessingSettings().concurrency;
+          },
         })
       : null);
 
@@ -181,7 +222,38 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
       .send({ error: "INTERNAL_ERROR", message: "服务器处理请求失败" });
   });
 
-  app.post("/api/batches/import", async (request, reply) => {
+  app.post<{ Querystring: { startRow?: string; endRow?: string } }>(
+    "/api/batches/import",
+    async (request, reply) => {
+      const uploaded = await readUpload(request);
+      if (!uploaded) {
+        return reply
+          .status(400)
+          .send({ error: "MISSING_FILE", message: "请上传 .xlsx 文件" });
+      }
+      if (!uploaded.fileName.toLowerCase().endsWith(".xlsx")) {
+        return reply
+          .status(400)
+          .send({ error: "INVALID_FILE", message: "仅支持 .xlsx 文件" });
+      }
+      const range = importRangeQuerySchema.parse(request.query);
+      const parsed = await parseImportWorkbook(uploaded.contents, {
+        start: range.startRow,
+        end: range.endRow,
+      });
+      const batch = repository.createBatch(
+        uploaded.fileName,
+        parsed.tasks,
+        parsed.errors,
+      );
+      return reply.status(201).send(batch);
+    },
+  );
+
+  // Dry-run counterpart of the import route: parses the workbook and reports
+  // row counts without persisting anything, so the UI can offer a row-range
+  // selector before the operator confirms the import.
+  app.post("/api/batches/import/preview", async (request, reply) => {
     const uploaded = await readUpload(request);
     if (!uploaded) {
       return reply
@@ -194,12 +266,17 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
         .send({ error: "INVALID_FILE", message: "仅支持 .xlsx 文件" });
     }
     const parsed = await parseImportWorkbook(uploaded.contents);
-    const batch = repository.createBatch(
-      uploaded.fileName,
-      parsed.tasks,
-      parsed.errors,
-    );
-    return reply.status(201).send(batch);
+    return {
+      totalDataRows: parsed.totalDataRows,
+      validCount: parsed.tasks.length,
+      errorCount: parsed.errors.length,
+      sample: parsed.tasks.slice(0, 5).map((task) => ({
+        rowNumber: task.rowNumber,
+        sourceUrl: task.sourceUrl,
+        inputTitle: task.inputTitle,
+        hasKeyword: Boolean(task.articleKeyword),
+      })),
+    };
   });
 
   app.get("/api/batches", async () => repository.listBatches());
@@ -313,12 +390,78 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
     "/api/tasks/:id",
     async (request, reply) => {
       const task = repository.getTask(request.params.id);
-      return (
-        task ??
-        reply
+      if (!task) {
+        return reply
           .status(404)
-          .send({ error: "TASK_NOT_FOUND", message: "任务不存在" })
+          .send({ error: "TASK_NOT_FOUND", message: "任务不存在" });
+      }
+      const artifacts = await loadTaskArtifacts(
+        task.id,
+        repository,
+        options.outputDirectory,
       );
+      return { ...task, artifacts };
+    },
+  );
+
+  // Re-renders only the tail page (and repacks the video) after the operator
+  // corrects the article keyword. The article snapshot is reused, so neither
+  // the browser nor the AI runs again and the cover stays untouched.
+  app.post<{ Params: { id: string } }>(
+    "/api/tasks/:id/rerender-tail",
+    async (request, reply) => {
+      if (!taskWorker?.rerenderTail) {
+        return reply.status(503).send({
+          error: "WORKER_UNAVAILABLE",
+          message: "任务执行器不可用。",
+        });
+      }
+      const result = await taskWorker.rerenderTail(request.params.id);
+      if (!result.ok) {
+        const status =
+          result.code === "TASK_NOT_FOUND"
+            ? 404
+            : result.code === "RENDER_FAILED"
+              ? 500
+              : 409;
+        return reply
+          .status(status)
+          .send({ error: result.code, message: result.message });
+      }
+      return repository.getTask(request.params.id);
+    },
+  );
+
+  // Streams the first rendered card (the cover) for in-app previews.
+  app.get<{ Params: { id: string } }>(
+    "/api/tasks/:id/preview-image",
+    async (request, reply) => {
+      const task = repository.getTaskDownloadInfo(request.params.id);
+      if (!task) {
+        return reply
+          .status(404)
+          .send({ error: "TASK_NOT_FOUND", message: "任务不存在" });
+      }
+      const outputDirectory = downloadableOutputDirectory(
+        task,
+        options.outputDirectory,
+      );
+      if (typeof outputDirectory === "number") {
+        return reply.status(outputDirectory).send(downloadErrorBody(task));
+      }
+      const imagesDirectory = join(outputDirectory, "images");
+      const cover = (await readdir(imagesDirectory).catch(() => [] as string[]))
+        .filter((file) => file.toLowerCase().endsWith(".png"))
+        .sort()[0];
+      if (!cover) {
+        return reply.status(404).send({
+          error: "ARTIFACT_NOT_FOUND",
+          message: "图片产物不存在，可能已被清理，请重试该任务。",
+        });
+      }
+      reply.header("content-type", "image/png");
+      reply.header("cache-control", "no-store");
+      return reply.send(createReadStream(join(imagesDirectory, cover)));
     },
   );
 
@@ -525,6 +668,15 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
     return buildBgmView(saved, options.databasePath);
   });
 
+  app.get("/api/settings/processing", async () =>
+    repository.getProcessingSettings(),
+  );
+
+  app.put("/api/settings/processing", async (request) => {
+    const input = processingUpdateSchema.parse(request.body);
+    return repository.saveProcessingSettings(input);
+  });
+
   app.delete("/api/settings/bgm", async () => {
     const directory = bgmUploadsDirectory(options.databasePath);
     for (const extension of ALLOWED_AUDIO_EXTENSIONS) {
@@ -540,6 +692,32 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
     database.close();
   });
   return app;
+}
+
+/**
+ * Computes the artifact summary shown in detail panels: rendered card count,
+ * whether the video exists, and the total duration implied by the card mix
+ * (1s cover + 2s per body page + 2s tail, matching pipeline durationForCard).
+ */
+async function loadTaskArtifacts(
+  taskId: string,
+  repository: TaskRepository,
+  outputRoot: string | undefined,
+): Promise<TaskArtifactsSummary | null> {
+  const info = repository.getTaskDownloadInfo(taskId);
+  if (!info?.outputDirectory) return null;
+  if (!isInsideOutputRoot(info.outputDirectory, outputRoot)) return null;
+  const outputDirectory = resolve(info.outputDirectory);
+  const files = await readdir(join(outputDirectory, "images")).catch(
+    () => [] as string[],
+  );
+  const imageCount = files.filter((file) =>
+    file.toLowerCase().endsWith(".png"),
+  ).length;
+  const videoReady = existsSync(join(outputDirectory, "video.mp4"));
+  if (imageCount === 0 && !videoReady) return null;
+  const durationSeconds = imageCount >= 2 ? imageCount * 2 - 1 : 0;
+  return { imageCount, videoReady, durationSeconds };
 }
 
 /**

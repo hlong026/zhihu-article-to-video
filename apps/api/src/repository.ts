@@ -5,9 +5,11 @@ import type {
   BatchSummary,
   BgmSettings,
   ManualArticleContent,
+  ProcessingSettings,
   SourceType,
   TaskStatus,
 } from "@zhihu-video/contracts";
+import { processingConcurrencyOptions } from "@zhihu-video/contracts";
 
 import type { SqliteDatabase } from "./database.js";
 import type { ImportRowError, ImportTaskInput } from "./importer.js";
@@ -21,6 +23,7 @@ import {
 const DEFAULT_TAIL_NOTE = "来知乎搜索🔍{文章口令}可以看到全文";
 
 const BGM_SETTINGS_KEY = "bgm";
+const PROCESSING_SETTINGS_KEY = "processing";
 
 export const DEFAULT_BGM_SETTINGS: BgmSettings = {
   enabled: false,
@@ -30,6 +33,18 @@ export const DEFAULT_BGM_SETTINGS: BgmSettings = {
   volume: 0.3,
   fadeOutSeconds: 1,
 };
+
+export const DEFAULT_PROCESSING_SETTINGS: ProcessingSettings = {
+  concurrency: 5,
+};
+
+/**
+ * The single source of truth for the locked tail-note copy: the keyword is
+ * always the Excel-supplied one, interpolated into the fixed template.
+ */
+export function renderTailNote(articleKeyword: string | null): string {
+  return renderedTailNote(DEFAULT_TAIL_NOTE, articleKeyword);
+}
 
 type BatchRow = {
   id: string;
@@ -575,6 +590,67 @@ export class TaskRepository {
       )
       .run(BGM_SETTINGS_KEY, JSON.stringify(settings), now());
     return this.getBgmSettings();
+  }
+
+  /**
+   * Reads the single global batch-processing configuration. Only the preset
+   * concurrency values are accepted; anything else falls back to the default.
+   */
+  getProcessingSettings(): ProcessingSettings {
+    const row = this.database
+      .prepare("SELECT value FROM app_settings WHERE key = ?")
+      .get(PROCESSING_SETTINGS_KEY) as { value: string } | undefined;
+    if (!row) return { ...DEFAULT_PROCESSING_SETTINGS };
+    try {
+      const parsed = JSON.parse(row.value) as Partial<ProcessingSettings>;
+      const concurrency = (processingConcurrencyOptions as readonly number[]).includes(
+        Number(parsed.concurrency),
+      )
+        ? Number(parsed.concurrency)
+        : DEFAULT_PROCESSING_SETTINGS.concurrency;
+      return { concurrency };
+    } catch {
+      return { ...DEFAULT_PROCESSING_SETTINGS };
+    }
+  }
+
+  saveProcessingSettings(settings: ProcessingSettings): ProcessingSettings {
+    if (
+      !(processingConcurrencyOptions as readonly number[]).includes(
+        settings.concurrency,
+      )
+    ) {
+      throw new Error("并发数仅支持 5 / 10 / 15 / 20。");
+    }
+    this.database
+      .prepare(
+        `INSERT INTO app_settings (key, value, updated_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+      )
+      .run(PROCESSING_SETTINGS_KEY, JSON.stringify(settings), now());
+    return this.getProcessingSettings();
+  }
+
+  /**
+   * Reports fine-grained progress within the current step. Unlike
+   * updateTaskExecution this never changes the task status, so the pipeline
+   * can stream sub-step updates (per-card image rendering, encoding start).
+   */
+  reportTaskProgress(
+    taskId: string,
+    progress: number,
+    message?: string,
+  ): void {
+    const clamped = Math.max(0, Math.min(100, Math.round(progress)));
+    const timestamp = now();
+    this.database
+      .prepare("UPDATE article_tasks SET progress = ?, updated_at = ? WHERE id = ?")
+      .run(clamped, timestamp, taskId);
+    if (message) {
+      const task = this.getTask(taskId);
+      if (task) this.logAttempt(taskId, task.step, "progress", message, timestamp);
+    }
   }
 
   private logAttempt(

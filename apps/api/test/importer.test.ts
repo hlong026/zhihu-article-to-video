@@ -82,3 +82,72 @@ describe("Excel import", () => {
     });
   });
 });
+
+describe("Excel import row ranges", () => {
+  async function workbookWithRows(rows: string[][]): Promise<Buffer> {
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet("任务");
+    sheet.addRow(["知乎标题", "链接", "文章口令"]);
+    for (const row of rows) sheet.addRow(row);
+    return Buffer.from(await workbook.xlsx.writeBuffer());
+  }
+
+  it("imports only the selected data-row range and reports totalDataRows", async () => {
+    const buffer = await workbookWithRows([
+      ["任务一", "https://www.zhihu.com/answer/1", "口令一"],
+      ["任务二", "https://www.zhihu.com/answer/2", "口令二"],
+      ["任务三", "https://www.zhihu.com/answer/3", "口令三"],
+      ["任务四", "https://www.zhihu.com/answer/4", "口令四"],
+      ["任务五", "https://www.zhihu.com/answer/5", "口令五"],
+    ]);
+
+    const parsed = await parseImportWorkbook(buffer, { start: 2, end: 3 });
+
+    expect(parsed.totalDataRows).toBe(5);
+    expect(parsed.tasks.map((task) => task.rowNumber)).toEqual([3, 4]);
+    expect(parsed.errors).toEqual([]);
+  });
+
+  it("clamps an end row beyond the last data row", async () => {
+    const buffer = await workbookWithRows([
+      ["任务一", "https://www.zhihu.com/answer/1", "口令一"],
+      ["任务二", "https://www.zhihu.com/answer/2", "口令二"],
+    ]);
+
+    const parsed = await parseImportWorkbook(buffer, { start: 2, end: 99 });
+
+    expect(parsed.totalDataRows).toBe(2);
+    expect(parsed.tasks.map((task) => task.rowNumber)).toEqual([3]);
+  });
+
+  it("skips rows outside the range silently, including invalid ones", async () => {
+    const buffer = await workbookWithRows([
+      ["坏链接", "https://example.com/a", "口令"],
+      ["任务二", "https://www.zhihu.com/answer/2", "口令二"],
+      ["任务三", "https://www.zhihu.com/answer/3", "口令三"],
+    ]);
+
+    const parsed = await parseImportWorkbook(buffer, { start: 2, end: 3 });
+
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.tasks.map((task) => task.rowNumber)).toEqual([3, 4]);
+  });
+
+  it("deduplicates within the selected range only", async () => {
+    const buffer = await workbookWithRows([
+      ["任务一", "https://www.zhihu.com/answer/1", "口令一"],
+      ["任务二", "https://www.zhihu.com/answer/2", "口令二"],
+      ["任务三", "https://www.zhihu.com/answer/2", "口令三"],
+      ["任务四", "https://www.zhihu.com/answer/1", "口令四"],
+    ]);
+
+    const parsed = await parseImportWorkbook(buffer, { start: 2, end: 4 });
+
+    // Row 5 repeats the row-2 link, but row 2 is outside the range and was
+    // never seen, so it imports cleanly; row 4 duplicates row 3 in-range.
+    expect(parsed.tasks.map((task) => task.rowNumber)).toEqual([3, 5]);
+    expect(parsed.errors).toEqual([
+      expect.objectContaining({ rowNumber: 4, code: "DUPLICATE_URL" }),
+    ]);
+  });
+});

@@ -1,8 +1,12 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import { App } from "../App";
+
+beforeEach(() => {
+  window.localStorage.clear();
+});
 
 describe("workbench", () => {
   it("only exposes the workbench and task history navigation", async () => {
@@ -22,7 +26,7 @@ describe("workbench", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("renders import, batch statistics, task actions, and tail note editing", async () => {
+  it("renders import, batch statistics, task actions, and keyword editing", async () => {
     render(
       <MemoryRouter>
         <App />
@@ -43,7 +47,48 @@ describe("workbench", () => {
     ).toBeVisible();
     expect(screen.getByRole("button", { name: "下载视频" })).toBeVisible();
     expect(
-      screen.getByRole("button", { name: "保存并重新渲染尾页" }),
+      screen.getByRole("button", { name: "保存口令并重渲尾页" }),
     ).toBeVisible();
+  });
+
+  it("shows the derived tail note preview for the keyword", async () => {
+    render(
+      <MemoryRouter>
+        <App />
+      </MemoryRouter>,
+    );
+
+    const keywordInput = await screen.findByRole("textbox", {
+      name: "文章口令",
+    });
+    expect(keywordInput).toHaveValue("AI 产品好用");
+    expect(
+      screen.getByText("来知乎搜索🔍AI 产品好用可以看到全文", {
+        selector: ".tail-note-preview",
+      }),
+    ).toBeVisible();
+  });
+});
+
+describe("sidebar", () => {
+  it("collapses and expands the navigation, persisting the choice", () => {
+    const { container } = render(
+      <MemoryRouter>
+        <App />
+      </MemoryRouter>,
+    );
+
+    const shell = container.querySelector(".app-shell");
+    expect(shell).not.toHaveClass("sidebar-collapsed");
+
+    fireEvent.click(screen.getByRole("button", { name: "折叠导航栏" }));
+    expect(shell).toHaveClass("sidebar-collapsed");
+    expect(window.localStorage.getItem("sidebar-collapsed")).toBe("true");
+    // Labels are hidden while icons keep their accessible names.
+    expect(screen.getByRole("link", { name: "工作台" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "展开导航栏" }));
+    expect(shell).not.toHaveClass("sidebar-collapsed");
+    expect(window.localStorage.getItem("sidebar-collapsed")).toBe("false");
   });
 });

@@ -49,9 +49,71 @@ export interface ArticleTask {
   updatedAt: string;
 }
 
+/** One entry of the per-task step/attempt log returned by the task detail API. */
+export interface TaskAttemptLog {
+  id: string;
+  attemptNumber: number;
+  step: string;
+  status: string;
+  message: string | null;
+  createdAt: string;
+}
+
+/** Read-model of a task's rendered artifacts, computed from the output dir. */
+export interface TaskArtifactsSummary {
+  imageCount: number;
+  videoReady: boolean;
+  /** Cover 1s + body pages 2s each + tail 2s, matching durationForCard. */
+  durationSeconds: number;
+}
+
+/** Task detail endpoint payload: the task plus its log and artifact summary. */
+export interface ArticleTaskDetail extends ArticleTask {
+  attempts: TaskAttemptLog[];
+  artifacts: TaskArtifactsSummary | null;
+}
+
+/** Batch detail endpoint payload, including rows skipped at import time. */
+export interface BatchDetailView extends BatchSummary {
+  status: string;
+  tasks: ArticleTask[];
+  importErrors: Array<{
+    rowNumber: number;
+    code: string;
+    message: string;
+  }>;
+}
+
+/** Dry-run import report used by the row-range picker before importing. */
+export interface ImportPreview {
+  totalDataRows: number;
+  validCount: number;
+  errorCount: number;
+  sample: Array<{
+    rowNumber: number;
+    sourceUrl: string;
+    inputTitle: string | null;
+    hasKeyword: boolean;
+  }>;
+}
+
 export interface SummaryPage {
   body: string;
   sourceRefs: number[];
+}
+
+/**
+ * Zhihu question-header metadata rendered on the cover card (author block
+ * and counters). Counts keep their original display text (e.g. "433" or
+ * "1.2万"); every field degrades to null when the page layout lacks it.
+ */
+export interface CoverPageMeta {
+  authorName: string | null;
+  authorBadge: string | null;
+  answerCount: string | null;
+  followCount: string | null;
+  /** Ready-to-embed data URI of the author's avatar image, when downloaded. */
+  avatarDataUri: string | null;
 }
 
 export interface VideoSummary {
@@ -62,6 +124,8 @@ export interface VideoSummary {
   /** True when the article overflowed 10 pages and a search-keyword tail is shown. */
   truncated: boolean;
   riskFlags: string[];
+  /** Absent for manual content or older snapshots; the cover then keeps its tags-only layout. */
+  coverMeta?: CoverPageMeta | null;
 }
 
 /** Where the operator's background-music track comes from. */
@@ -96,4 +160,16 @@ export interface BgmSettingsView extends BgmSettings {
   presets: BgmPreset[];
   /** True when a usable audio file is resolved for the current selection. */
   hasAudio: boolean;
+}
+
+/** Concurrency presets offered in the workbench processing card. */
+export const processingConcurrencyOptions = [5, 10, 15, 20] as const;
+
+/**
+ * Global batch-processing configuration (single operator, one row). The
+ * Zhihu reader always stays serial to respect rate limits; concurrency only
+ * widens AI calls and media rendering.
+ */
+export interface ProcessingSettings {
+  concurrency: number;
 }

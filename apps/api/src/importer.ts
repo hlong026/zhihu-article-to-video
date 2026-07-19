@@ -26,6 +26,17 @@ export interface ImportRowError {
 export interface WorkbookImportResult {
   tasks: ImportTaskInput[];
   errors: ImportRowError[];
+  /** Data rows under the header, regardless of any applied import range. */
+  totalDataRows: number;
+}
+
+/**
+ * 1-based data-row selection (the header is row 0 of the data indexing).
+ * "导入第 1-10 条" maps to `{ start: 1, end: 10 }`.
+ */
+export interface ImportRowRange {
+  start?: number;
+  end?: number;
 }
 
 const supportedUrlPatterns: Array<{ sourceType: SourceType; pattern: RegExp }> =
@@ -105,6 +116,7 @@ function toExcelLoadInput(contents: unknown): ExcelLoadInput {
 
 export async function parseImportWorkbook(
   contents: unknown,
+  rowRange: ImportRowRange = {},
 ): Promise<WorkbookImportResult> {
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(toExcelLoadInput(contents));
@@ -122,10 +134,17 @@ export async function parseImportWorkbook(
   const dateColumn = headers.get("日期");
   const titleColumn = headers.get("知乎标题");
   const keywordColumn = headers.get("文章口令");
-  const result: WorkbookImportResult = { tasks: [], errors: [] };
+  const totalDataRows = Math.max(0, sheet.rowCount - 1);
+  const result: WorkbookImportResult = { tasks: [], errors: [], totalDataRows };
   const seenUrls = new Set<string>();
+  const rangeStart = rowRange.start ?? 1;
+  const rangeEnd = rowRange.end ?? totalDataRows;
 
   for (let rowNumber = 2; rowNumber <= sheet.rowCount; rowNumber += 1) {
+    // Rows outside the requested range are skipped silently: they are not
+    // imported and must not produce validation errors.
+    const dataIndex = rowNumber - 1;
+    if (dataIndex < rangeStart || dataIndex > rangeEnd) continue;
     const row = sheet.getRow(rowNumber);
     const sourceUrl = text(row.getCell(linkColumn).value);
     if (!sourceUrl) {

@@ -1,6 +1,7 @@
 import { ChevronRight, Download, Eye, RotateCw } from "lucide-react";
 import type { ArticleTask } from "@zhihu-video/contracts";
 
+import { isActiveTaskStatus } from "../api/client";
 import { StatusBadge, statusLabel } from "./StatusBadge";
 
 interface TaskTableProps {
@@ -157,9 +158,15 @@ export function TaskTable({
                   </td>
                   <td>
                     <div className="progress-cell">
-                      <span>{task.progress}%</span>
+                      <span>
+                        {isActiveTaskStatus(task.status)
+                          ? `${statusLabel(task.status)} ${task.progress}%`
+                          : `${task.progress}%`}
+                      </span>
                       <div
-                        className="progress-track"
+                        className={`progress-track${
+                          isActiveTaskStatus(task.status) ? " is-active" : ""
+                        }`}
                         aria-label={`${statusLabel(task.status)} ${task.progress}%`}
                       >
                         <i style={{ width: `${task.progress}%` }} />

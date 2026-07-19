@@ -1,14 +1,24 @@
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import {
   buildPreparedVideo,
+  paginateParagraphs,
+  truncateVideoTitle,
+  validateVideoSummary,
   type FfmpegAudioOptions,
+  type SourcePageMeta,
   type SummaryGenerator,
+  type VideoSummary,
   type ZhihuContentReader,
 } from "@zhihu-video/pipeline";
 
 import { renderVideoAssets } from "./media-renderer.js";
 import { TaskRepository } from "./repository.js";
+
+export type RerenderTailResult =
+  | { ok: true }
+  | { ok: false; code: string; message: string };
 
 export class TaskWorker {
   constructor(
@@ -19,17 +29,33 @@ export class TaskWorker {
       outputDirectory: string;
       /** Resolves the background-music track for each render, if configured. */
       resolveAudio?: () => FfmpegAudioOptions | null;
+      /**
+       * Resolves the batch lane count at start time. The Zhihu reader stays
+       * serial internally, so concurrency only widens AI calls and rendering.
+       */
+      resolveConcurrency?: () => number;
     },
   ) {}
 
   async runBatch(batchId: string): Promise<void> {
     const batch = this.repository.getBatch(batchId);
     if (!batch) return;
-    for (const task of batch.tasks.filter(
-      (item) => item.status === "fetching",
-    )) {
-      await this.runTask(task.id);
-    }
+    // Hand-rolled worker pool: N lanes pull task ids until the queue drains.
+    // A failing task never blocks the others (runTask captures its errors).
+    const queue = batch.tasks
+      .filter((item) => item.status === "fetching")
+      .map((item) => item.id);
+    const configured = this.dependencies.resolveConcurrency?.() ?? 1;
+    const concurrency = Math.max(1, Math.min(20, Math.floor(configured)));
+    const lanes = Array.from(
+      { length: Math.min(concurrency, queue.length) },
+      async () => {
+        for (let taskId = queue.shift(); taskId; taskId = queue.shift()) {
+          await this.runTask(taskId);
+        }
+      },
+    );
+    await Promise.all(lanes);
   }
 
   async runTask(taskId: string): Promise<void> {
@@ -37,6 +63,7 @@ export class TaskWorker {
     if (!task) return;
     const outputDirectory = join(this.dependencies.outputDirectory, taskId);
     try {
+      this.repository.reportTaskProgress(taskId, 5, "开始读取文章内容");
       const prepared = await buildPreparedVideo(
         {
           sourceUrl: task.sourceUrl,
@@ -71,6 +98,7 @@ export class TaskWorker {
         to: "summarizing",
         message: "正文分页与 AI 标题标签已完成校验",
       });
+      this.repository.reportTaskProgress(taskId, 35, "标题与标签已生成");
       this.repository.updateTaskExecution(taskId, {
         kind: "advance",
         to: "rendering_images",
@@ -82,17 +110,26 @@ export class TaskWorker {
         // A "ready" result implies the keyword was verified by the pipeline.
         keyword: task.articleKeyword!,
         audio: this.dependencies.resolveAudio?.() ?? undefined,
+        onImageProgress: (done, total) =>
+          this.repository.reportTaskProgress(
+            taskId,
+            50 + (20 * done) / Math.max(1, total),
+          ),
+        onVideoEncodingStart: () => {
+          this.repository.updateTaskExecution(taskId, {
+            kind: "advance",
+            to: "rendering_video",
+            message: "图片已生成，开始合成视频",
+          });
+          this.repository.reportTaskProgress(taskId, 80);
+        },
       });
       this.repository.saveTaskArtifacts(taskId, {
         finalTitle: prepared.summary.videoTitle,
         finalTags: prepared.summary.tags,
         outputDirectory,
       });
-      this.repository.updateTaskExecution(taskId, {
-        kind: "advance",
-        to: "rendering_video",
-        message: "图片已生成，视频已合成",
-      });
+      this.repository.reportTaskProgress(taskId, 95, "视频合成完成，正在收尾");
       this.repository.updateTaskExecution(taskId, {
         kind: "advance",
         to: "completed",
@@ -110,4 +147,150 @@ export class TaskWorker {
       });
     }
   }
+
+  /**
+   * Re-renders the tail page (and repacks the video) with the current keyword,
+   * reusing the stored article snapshot. Neither the browser reader nor the
+   * AI runs again, and the existing cover title/tags are preserved.
+   */
+  async rerenderTail(taskId: string): Promise<RerenderTailResult> {
+    const task = this.repository.getTask(taskId);
+    if (!task) {
+      return { ok: false, code: "TASK_NOT_FOUND", message: "任务不存在。" };
+    }
+    if (task.status !== "completed" && task.status !== "needs_review") {
+      return {
+        ok: false,
+        code: "INVALID_TASK_STATE",
+        message: "只有已完成或需人工确认的任务可以重渲尾页。",
+      };
+    }
+    const keyword = task.articleKeyword?.trim();
+    if (!keyword) {
+      return {
+        ok: false,
+        code: "KEYWORD_REQUIRED",
+        message: "请先填写并保存文章口令。",
+      };
+    }
+    const outputDirectory = join(this.dependencies.outputDirectory, taskId);
+    const content: {
+      title: string;
+      paragraphs: string[];
+      meta?: SourcePageMeta | null;
+    } | null = task.manualContent ?? (await readSnapshotContent(outputDirectory));
+    if (!content) {
+      return {
+        ok: false,
+        code: "SNAPSHOT_MISSING",
+        message: "缺少文章快照，无法单独重渲尾页，请使用重试重新抓取。",
+      };
+    }
+    const { pages, truncated } = paginateParagraphs(content.paragraphs);
+    const summary: VideoSummary = {
+      sourceTitle: content.title,
+      videoTitle: task.finalTitle ?? truncateVideoTitle(content.title),
+      tags: task.finalTags,
+      pages,
+      truncated,
+      riskFlags: [],
+      // Older snapshots carry no page metadata; the cover then keeps its
+      // tags-only fallback layout.
+      coverMeta: content.meta ?? null,
+    };
+    const validation = validateVideoSummary(summary, {
+      hasVerifiedKeyword: true,
+    });
+    if (validation.status === "needs_review") {
+      return {
+        ok: false,
+        code: "SUMMARY_REVIEW",
+        message: validation.issues.map((issue) => issue.message).join("；"),
+      };
+    }
+
+    const previousProgress = task.progress;
+    try {
+      this.repository.reportTaskProgress(taskId, 50, "按新口令重新渲染图片");
+      await renderVideoAssets({
+        outputDirectory,
+        summary,
+        keyword,
+        audio: this.dependencies.resolveAudio?.() ?? undefined,
+        onImageProgress: (done, total) =>
+          this.repository.reportTaskProgress(
+            taskId,
+            50 + (30 * done) / Math.max(1, total),
+          ),
+        onVideoEncodingStart: () =>
+          this.repository.reportTaskProgress(taskId, 85, "正在重新合成视频"),
+      });
+    } catch (error) {
+      this.repository.reportTaskProgress(taskId, previousProgress);
+      return {
+        ok: false,
+        code: "RENDER_FAILED",
+        message: error instanceof Error ? error.message : "尾页重渲失败。",
+      };
+    }
+    this.repository.saveTaskArtifacts(taskId, {
+      finalTitle: summary.videoTitle,
+      finalTags: summary.tags,
+      outputDirectory,
+    });
+    this.repository.reportTaskProgress(
+      taskId,
+      task.status === "completed" ? 100 : previousProgress,
+      "尾页与视频已按新口令重新渲染",
+    );
+    return { ok: true };
+  }
+}
+
+/** Reads the persisted article snapshot (written by the reader on success). */
+async function readSnapshotContent(outputDirectory: string): Promise<{
+  title: string;
+  paragraphs: string[];
+  meta: SourcePageMeta | null;
+} | null> {
+  try {
+    const raw = await readFile(join(outputDirectory, "source.json"), "utf8");
+    const parsed = JSON.parse(raw) as {
+      title?: unknown;
+      paragraphs?: unknown;
+      meta?: unknown;
+    };
+    if (typeof parsed.title !== "string" || !Array.isArray(parsed.paragraphs)) {
+      return null;
+    }
+    const paragraphs = parsed.paragraphs.filter(
+      (paragraph): paragraph is string => typeof paragraph === "string",
+    );
+    if (!parsed.title || paragraphs.length === 0) return null;
+    return {
+      title: parsed.title,
+      paragraphs,
+      meta: parseSnapshotMeta(parsed.meta),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Defensively parses the optional cover metadata stored in source.json. */
+function parseSnapshotMeta(value: unknown): SourcePageMeta | null {
+  if (typeof value !== "object" || value === null) return null;
+  const record = value as Record<string, unknown>;
+  const read = (key: keyof SourcePageMeta): string | null =>
+    typeof record[key] === "string" && record[key]
+      ? (record[key] as string)
+      : null;
+  const meta: SourcePageMeta = {
+    authorName: read("authorName"),
+    authorBadge: read("authorBadge"),
+    answerCount: read("answerCount"),
+    followCount: read("followCount"),
+    avatarDataUri: read("avatarDataUri"),
+  };
+  return meta.authorName ?? meta.answerCount ?? meta.followCount ? meta : null;
 }

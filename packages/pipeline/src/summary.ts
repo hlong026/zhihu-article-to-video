@@ -1,4 +1,5 @@
 import { countBodyCharacters } from "./pagination.js";
+import type { SourcePageMeta } from "./source.js";
 
 /** Kept structurally compatible with @zhihu-video/contracts for API handoff. */
 export interface SummaryPage {
@@ -15,6 +16,12 @@ export interface VideoSummary {
   /** True when the article overflowed 10 pages and a search-keyword tail is shown. */
   truncated: boolean;
   riskFlags: string[];
+  /**
+   * Zhihu question-header metadata rendered on the cover (author block and
+   * counters). Absent for manually supplied content or older snapshots, in
+   * which case the cover falls back to the tags-only layout.
+   */
+  coverMeta?: SourcePageMeta | null;
 }
 
 export interface SummaryValidationOptions {
@@ -111,7 +118,10 @@ export function isVideoSummary(value: unknown): value is VideoSummary {
     Array.isArray(value.pages) &&
     value.pages.every(isSummaryPage) &&
     typeof value.truncated === "boolean" &&
-    isStringArray(value.riskFlags)
+    isStringArray(value.riskFlags) &&
+    (value.coverMeta === undefined ||
+      value.coverMeta === null ||
+      isSourcePageMeta(value.coverMeta))
   );
 }
 
@@ -218,5 +228,19 @@ function isSummaryPage(value: unknown): value is SummaryPage {
     typeof value.body === "string" &&
     Array.isArray(value.sourceRefs) &&
     value.sourceRefs.every((item) => typeof item === "number")
+  );
+}
+
+function isSourcePageMeta(value: unknown): value is SourcePageMeta {
+  if (!isRecord(value)) return false;
+  const fields = [
+    "authorName",
+    "authorBadge",
+    "answerCount",
+    "followCount",
+    "avatarDataUri",
+  ] as const;
+  return fields.every(
+    (field) => value[field] === null || typeof value[field] === "string",
   );
 }

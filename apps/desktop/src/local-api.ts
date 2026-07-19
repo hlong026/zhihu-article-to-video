@@ -4,8 +4,12 @@ import { pathToFileURL } from "node:url";
 
 import type {
   ArticleTask,
+  ArticleTaskDetail,
+  BatchDetailView,
   BatchSummary,
   BgmSettingsView,
+  ImportPreview,
+  ProcessingSettings,
 } from "@zhihu-video/contracts";
 
 type ApiReply = {
@@ -40,16 +44,32 @@ export interface DownloadedAsset {
   contents: Buffer;
 }
 
+export interface ImportRange {
+  startRow?: number;
+  endRow?: number;
+}
+
+const workbookContentType =
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
 export interface DesktopApi {
   listBatches(): Promise<BatchDetail[]>;
-  importWorkbook(workbookPath: string): Promise<BatchDetail>;
+  getBatch(batchId: string): Promise<BatchDetailView>;
+  getTask(taskId: string): Promise<ArticleTaskDetail>;
+  previewWorkbook(workbookPath: string): Promise<ImportPreview>;
+  importWorkbook(
+    workbookPath: string,
+    range?: ImportRange,
+  ): Promise<BatchDetail>;
   startBatch(batchId: string): Promise<BatchDetail>;
-  updateTask(taskId: string, tailNote: string): Promise<ArticleTask>;
+  updateKeyword(taskId: string, articleKeyword: string): Promise<ArticleTask>;
+  rerenderTail(taskId: string): Promise<ArticleTask>;
   saveManualContent(
     taskId: string,
     input: { title: string; content: string },
   ): Promise<ArticleTask>;
   retryTask(taskId: string): Promise<ArticleTask>;
+  taskPreviewImage(taskId: string): Promise<BgmPreviewAsset>;
   downloadVideo(taskId: string): Promise<DownloadedAsset>;
   downloadImages(taskId: string): Promise<DownloadedAsset>;
   downloadBatch(batchId: string): Promise<DownloadedAsset>;
@@ -59,6 +79,8 @@ export interface DesktopApi {
   uploadBgm(audioPath: string): Promise<BgmSettingsView>;
   previewBgm(): Promise<BgmPreviewAsset>;
   clearBgm(): Promise<BgmSettingsView>;
+  getProcessing(): Promise<ProcessingSettings>;
+  updateProcessing(patch: ProcessingSettings): Promise<ProcessingSettings>;
   close(): Promise<void>;
 }
 
@@ -99,14 +121,46 @@ export async function createDesktopApi(options: {
   return {
     listBatches: () =>
       send<BatchDetail[]>(app, { method: "GET", url: "/api/batches" }),
-    async importWorkbook(workbookPath: string): Promise<BatchDetail> {
+    getBatch: (batchId) =>
+      send<BatchDetailView>(app, {
+        method: "GET",
+        url: `/api/batches/${encodeURIComponent(batchId)}`,
+      }),
+    getTask: (taskId) =>
+      send<ArticleTaskDetail>(app, {
+        method: "GET",
+        url: `/api/tasks/${encodeURIComponent(taskId)}`,
+      }),
+    async previewWorkbook(workbookPath: string): Promise<ImportPreview> {
       const contents = await readFile(workbookPath);
+      return send<ImportPreview>(app, {
+        method: "POST",
+        url: "/api/batches/import/preview",
+        headers: {
+          "content-type": workbookContentType,
+          "x-file-name": basename(workbookPath),
+        },
+        payload: contents,
+      });
+    },
+    async importWorkbook(
+      workbookPath: string,
+      range: ImportRange = {},
+    ): Promise<BatchDetail> {
+      const contents = await readFile(workbookPath);
+      const query = new URLSearchParams();
+      if (range.startRow !== undefined) {
+        query.set("startRow", String(range.startRow));
+      }
+      if (range.endRow !== undefined) {
+        query.set("endRow", String(range.endRow));
+      }
+      const suffix = query.size > 0 ? `?${query.toString()}` : "";
       return send<BatchDetail>(app, {
         method: "POST",
-        url: "/api/batches/import",
+        url: `/api/batches/import${suffix}`,
         headers: {
-          "content-type":
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          "content-type": workbookContentType,
           "x-file-name": basename(workbookPath),
         },
         payload: contents,
@@ -117,12 +171,17 @@ export async function createDesktopApi(options: {
         method: "POST",
         url: `/api/batches/${encodeURIComponent(batchId)}/start`,
       }),
-    updateTask: (taskId, tailNote) =>
+    updateKeyword: (taskId, articleKeyword) =>
       send<ArticleTask>(app, {
         method: "PATCH",
         url: `/api/tasks/${encodeURIComponent(taskId)}`,
         headers: { "content-type": "application/json" },
-        payload: JSON.stringify({ tailNote }),
+        payload: JSON.stringify({ articleKeyword }),
+      }),
+    rerenderTail: (taskId) =>
+      send<ArticleTask>(app, {
+        method: "POST",
+        url: `/api/tasks/${encodeURIComponent(taskId)}/rerender-tail`,
       }),
     saveManualContent: (taskId, input) =>
       send<ArticleTask>(app, {
@@ -136,6 +195,8 @@ export async function createDesktopApi(options: {
         method: "POST",
         url: `/api/tasks/${encodeURIComponent(taskId)}/retry`,
       }),
+    taskPreviewImage: (taskId) =>
+      streamAsset(app, `/api/tasks/${encodeURIComponent(taskId)}/preview-image`),
     downloadVideo: (taskId) =>
       downloadAsset(
         app,
@@ -184,27 +245,20 @@ export async function createDesktopApi(options: {
         method: "DELETE",
         url: "/api/settings/bgm",
       }),
-    async previewBgm(): Promise<BgmPreviewAsset> {
-      const response = await app.inject({
+    getProcessing: () =>
+      send<ProcessingSettings>(app, {
         method: "GET",
-        url: "/api/settings/bgm/preview",
-      });
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        const payload = response.body
-          ? (JSON.parse(response.body) as unknown)
-          : null;
-        const message = isErrorPayload(payload)
-          ? payload.message
-          : "背景音乐试听失败。";
-        throw new Error(message);
-      }
-      const contentType = response.headers["content-type"];
-      return {
-        contentType: Array.isArray(contentType)
-          ? (contentType[0] ?? "application/octet-stream")
-          : (contentType ?? "application/octet-stream"),
-        contents: response.rawPayload,
-      };
+        url: "/api/settings/processing",
+      }),
+    updateProcessing: (patch) =>
+      send<ProcessingSettings>(app, {
+        method: "PUT",
+        url: "/api/settings/processing",
+        headers: { "content-type": "application/json" },
+        payload: JSON.stringify(patch),
+      }),
+    async previewBgm(): Promise<BgmPreviewAsset> {
+      return streamAsset(app, "/api/settings/bgm/preview");
     },
     close: () => app.close(),
   };
@@ -216,9 +270,7 @@ async function downloadAsset(
 ): Promise<DownloadedAsset> {
   const response = await app.inject({ method: "GET", url });
   if (response.statusCode < 200 || response.statusCode >= 300) {
-    const payload = response.body
-      ? (JSON.parse(response.body) as unknown)
-      : null;
+    const payload = response.body ? (JSON.parse(response.body) as unknown) : null;
     const message = isErrorPayload(payload)
       ? payload.message
       : "成品下载失败。";
@@ -226,6 +278,26 @@ async function downloadAsset(
   }
   return {
     fileName: parseDownloadFileName(response.headers["content-disposition"]),
+    contents: response.rawPayload,
+  };
+}
+
+/** Streams a binary asset with its content type (previews, images). */
+async function streamAsset(
+  app: LocalFastify,
+  url: string,
+): Promise<BgmPreviewAsset> {
+  const response = await app.inject({ method: "GET", url });
+  if (response.statusCode < 200 || response.statusCode >= 300) {
+    const payload = response.body ? (JSON.parse(response.body) as unknown) : null;
+    const message = isErrorPayload(payload) ? payload.message : "读取预览失败。";
+    throw new Error(message);
+  }
+  const contentType = response.headers["content-type"];
+  return {
+    contentType: Array.isArray(contentType)
+      ? (contentType[0] ?? "application/octet-stream")
+      : (contentType ?? "application/octet-stream"),
     contents: response.rawPayload,
   };
 }

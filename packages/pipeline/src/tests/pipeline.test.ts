@@ -455,6 +455,108 @@ export async function runPipelineTests(): Promise<void> {
     true,
     "tail SVG should XML-escape the verified search phrase",
   );
+
+  const metaSummary: VideoSummary = {
+    ...validSummary,
+    coverMeta: {
+      authorName: "摸鱼作家",
+      authorBadge: "互联网行业 软件工程师",
+      answerCount: "278",
+      followCount: "623",
+      avatarDataUri: "data:image/jpeg;base64,QUJD",
+    },
+  };
+  const metaCards = buildCardSequence(metaSummary, "三个方法");
+  const metaCover = metaCards[0];
+  if (metaCover?.kind !== "cover") {
+    throw new Error("expected the first card to be the cover");
+  }
+  deepEqual(
+    metaCover.meta,
+    metaSummary.coverMeta,
+    "cover card should carry the question-header metadata",
+  );
+  const metaCoverSvg = renderSummarySvgCards(metaSummary, "三个方法")[0];
+  equal(
+    metaCoverSvg?.svg.includes("知乎 · 278 个回答 · 623 关注"),
+    true,
+    "cover meta line should show answer and follow counters",
+  );
+  equal(
+    metaCoverSvg?.svg.includes("摸鱼作家"),
+    true,
+    "cover should show the author name",
+  );
+  equal(
+    metaCoverSvg?.svg.includes("互联网行业 软件工程师"),
+    true,
+    "cover should show the author badge",
+  );
+  equal(
+    metaCoverSvg?.svg.includes("+ 关注"),
+    true,
+    "cover should show the decorative follow pill",
+  );
+  equal(
+    metaCoverSvg?.svg.includes('clip-path="url(#cover-avatar-clip)"'),
+    true,
+    "cover avatar should be clipped to a circle",
+  );
+  equal(
+    metaCoverSvg?.svg.includes("data:image/jpeg;base64,QUJD"),
+    true,
+    "cover should embed the avatar data URI",
+  );
+
+  const partialMetaSvg = renderSummarySvgCards(
+    {
+      ...metaSummary,
+      coverMeta: {
+        authorName: "匿名",
+        authorBadge: null,
+        answerCount: "278",
+        followCount: null,
+        avatarDataUri: null,
+      },
+    },
+    "三个方法",
+  )[0];
+  equal(
+    partialMetaSvg?.svg.includes("知乎 · 278 个回答</text>"),
+    true,
+    "a missing follow count should end the meta line at the answer count",
+  );
+  equal(
+    partialMetaSvg?.svg.includes('clip-path="url(#cover-avatar-clip)"'),
+    false,
+    "a missing avatar should fall back to the initial placeholder",
+  );
+
+  const legacyCoverSvg = renderSummarySvgCards(validSummary, "三个方法")[0];
+  equal(
+    legacyCoverSvg?.svg.includes("知乎 · 内容创作 · 知乎 · AI"),
+    true,
+    "a cover without page metadata should keep the tags meta line",
+  );
+  equal(
+    legacyCoverSvg?.svg.includes("+ 关注"),
+    false,
+    "a cover without page metadata should not render the author block",
+  );
+
+  const escapedAuthorSvg = renderSummarySvgCards(
+    {
+      ...metaSummary,
+      coverMeta: { ...metaSummary.coverMeta!, authorName: "摸鱼 & <作家>" },
+    },
+    "三个方法",
+  )[0];
+  equal(
+    escapedAuthorSvg?.svg.includes("摸鱼 &amp; &lt;作家&gt;"),
+    true,
+    "cover should XML-escape the author name",
+  );
+
   const svgOutputDirectory = await mkdtemp(join(tmpdir(), "zhihu-video-svg-"));
   try {
     const writtenCards = await writeSummarySvgCards(
@@ -475,12 +577,36 @@ export async function runPipelineTests(): Promise<void> {
 
   const pngOutputDirectory = await mkdtemp(join(tmpdir(), "zhihu-video-png-"));
   try {
+    const pngProgress: Array<[number, number]> = [];
     const writtenPngCards = await writeSummaryPngCards(
       pngOutputDirectory,
       validSummary,
       "三个方法",
+      (done, total) => {
+        pngProgress.push([done, total]);
+      },
     );
     equal(writtenPngCards.length, 5, "every SVG card should rasterize to PNG");
+    equal(
+      pngProgress.length,
+      5,
+      "the PNG writer should report progress for every card",
+    );
+    deepEqual(
+      pngProgress.map(([, total]) => total),
+      [5, 5, 5, 5, 5],
+      "each progress callback should carry the full card count",
+    );
+    deepEqual(
+      pngProgress.map(([done]) => done).sort((a, b) => a - b),
+      [1, 2, 3, 4, 5],
+      "progress should advance exactly once per written card",
+    );
+    equal(
+      pngProgress.at(-1)?.[0],
+      5,
+      "the final progress report should complete the set",
+    );
     equal(
       writtenPngCards[0]?.outputPath.endsWith("1-cover.png"),
       true,

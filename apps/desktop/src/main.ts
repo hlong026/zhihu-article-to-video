@@ -82,14 +82,33 @@ function registerIpcHandlers(): void {
     requireApi().listBatches(),
   );
 
-  ipcMain.handle("desktop:import-excel", async () => {
-    const result = await dialog.showOpenDialog({
-      title: "选择知乎链接 Excel",
-      properties: ["openFile"],
-      filters: [{ name: "Excel", extensions: ["xlsx"] }],
+  ipcMain.handle("desktop:get-batch", async (_event, batchId: unknown) => {
+    if (typeof batchId !== "string" || batchId.length === 0) {
+      throw new Error("批次参数无效。");
+    }
+    return requireApi().getBatch(batchId);
+  });
+
+  ipcMain.handle("desktop:get-task", async (_event, taskId: unknown) => {
+    if (typeof taskId !== "string" || taskId.length === 0) {
+      throw new Error("任务参数无效。");
+    }
+    return requireApi().getTask(taskId);
+  });
+
+  ipcMain.handle("desktop:preview-import", async (_event, input: unknown) => {
+    if (typeof input !== "string" || input.length === 0) {
+      throw new Error("Excel 文件路径无效。");
+    }
+    return requireApi().previewWorkbook(input);
+  });
+
+  ipcMain.handle("desktop:import-excel", async (_event, input: unknown) => {
+    if (!isImportRequest(input)) throw new Error("导入参数无效。");
+    return requireApi().importWorkbook(input.path, {
+      startRow: input.startRow,
+      endRow: input.endRow,
     });
-    const workbookPath = result.canceled ? null : result.filePaths[0];
-    return workbookPath ? requireApi().importWorkbook(workbookPath) : null;
   });
 
   ipcMain.handle("desktop:start-batch", async (_event, batchId: unknown) => {
@@ -98,9 +117,16 @@ function registerIpcHandlers(): void {
     return requireApi().startBatch(batchId);
   });
 
-  ipcMain.handle("desktop:update-tail-note", async (_event, input: unknown) => {
-    if (!isTailNoteUpdate(input)) throw new Error("尾注参数无效。");
-    return requireApi().updateTask(input.taskId, input.tailNote);
+  ipcMain.handle("desktop:update-keyword", async (_event, input: unknown) => {
+    if (!isKeywordUpdate(input)) throw new Error("口令参数无效。");
+    return requireApi().updateKeyword(input.taskId, input.articleKeyword);
+  });
+
+  ipcMain.handle("desktop:rerender-tail", async (_event, taskId: unknown) => {
+    if (typeof taskId !== "string" || taskId.length === 0) {
+      throw new Error("任务参数无效。");
+    }
+    return requireApi().rerenderTail(taskId);
   });
 
   ipcMain.handle(
@@ -120,6 +146,16 @@ function registerIpcHandlers(): void {
     }
     return requireApi().retryTask(taskId);
   });
+
+  ipcMain.handle(
+    "desktop:task-preview-image",
+    async (_event, taskId: unknown) => {
+      if (typeof taskId !== "string" || taskId.length === 0) {
+        throw new Error("任务参数无效。");
+      }
+      return requireApi().taskPreviewImage(taskId);
+    },
+  );
 
   ipcMain.handle("desktop:download-video", async (_event, taskId: unknown) => {
     if (typeof taskId !== "string" || taskId.length === 0) {
@@ -191,6 +227,23 @@ function registerIpcHandlers(): void {
   ipcMain.handle("desktop:clear-bgm", async () => requireApi().clearBgm());
 
   ipcMain.handle("desktop:preview-bgm", async () => requireApi().previewBgm());
+
+  ipcMain.handle("desktop:get-processing", async () =>
+    requireApi().getProcessing(),
+  );
+
+  ipcMain.handle("desktop:update-processing", async (_event, patch: unknown) => {
+    if (
+      typeof patch !== "object" ||
+      patch === null ||
+      typeof (patch as { concurrency?: unknown }).concurrency !== "number"
+    ) {
+      throw new Error("并发设置参数无效。");
+    }
+    return requireApi().updateProcessing(
+      patch as { concurrency: number },
+    );
+  });
 }
 
 /** Prompts for a destination and writes the asset; null when cancelled. */
@@ -213,16 +266,29 @@ function requireApi(): DesktopApi {
   return localApi;
 }
 
-function isTailNoteUpdate(
+function isImportRequest(
   value: unknown,
-): value is { taskId: string; tailNote: string } {
+): value is { path: string; startRow?: number; endRow?: number } {
+  if (typeof value !== "object" || value === null) return false;
+  const patch = value as Record<string, unknown>;
+  return (
+    typeof patch.path === "string" &&
+    patch.path.length > 0 &&
+    (patch.startRow === undefined || typeof patch.startRow === "number") &&
+    (patch.endRow === undefined || typeof patch.endRow === "number")
+  );
+}
+
+function isKeywordUpdate(
+  value: unknown,
+): value is { taskId: string; articleKeyword: string } {
   return (
     typeof value === "object" &&
     value !== null &&
     "taskId" in value &&
-    "tailNote" in value &&
+    "articleKeyword" in value &&
     typeof value.taskId === "string" &&
-    typeof value.tailNote === "string"
+    typeof value.articleKeyword === "string"
   );
 }
 
@@ -296,11 +362,16 @@ app.on("will-quit", () => {
   ipcMain.removeHandler("desktop:select-excel");
   ipcMain.removeHandler("desktop:select-output-directory");
   ipcMain.removeHandler("desktop:list-batches");
+  ipcMain.removeHandler("desktop:get-batch");
+  ipcMain.removeHandler("desktop:get-task");
+  ipcMain.removeHandler("desktop:preview-import");
   ipcMain.removeHandler("desktop:import-excel");
   ipcMain.removeHandler("desktop:start-batch");
-  ipcMain.removeHandler("desktop:update-tail-note");
+  ipcMain.removeHandler("desktop:update-keyword");
+  ipcMain.removeHandler("desktop:rerender-tail");
   ipcMain.removeHandler("desktop:save-manual-content");
   ipcMain.removeHandler("desktop:retry-task");
+  ipcMain.removeHandler("desktop:task-preview-image");
   ipcMain.removeHandler("desktop:download-video");
   ipcMain.removeHandler("desktop:download-images");
   ipcMain.removeHandler("desktop:download-batch");
@@ -310,5 +381,7 @@ app.on("will-quit", () => {
   ipcMain.removeHandler("desktop:upload-bgm");
   ipcMain.removeHandler("desktop:clear-bgm");
   ipcMain.removeHandler("desktop:preview-bgm");
+  ipcMain.removeHandler("desktop:get-processing");
+  ipcMain.removeHandler("desktop:update-processing");
   void localApi?.close();
 });

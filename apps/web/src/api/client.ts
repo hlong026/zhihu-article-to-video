@@ -1,7 +1,11 @@
 import type {
   ArticleTask,
+  ArticleTaskDetail,
+  BatchDetailView,
   BatchSummary,
   BgmSettingsView,
+  ImportPreview,
+  ProcessingSettings,
   TaskStatus,
 } from "@zhihu-video/contracts";
 
@@ -13,6 +17,21 @@ export interface WorkbenchData {
 export interface ImportResult {
   batchId: string;
   createdCount: number;
+}
+
+export interface ImportRangeSelection {
+  startRow?: number;
+  endRow?: number;
+}
+
+/** A workbook chosen by the operator, plus its dry-run parse report. */
+export interface PreparedImport {
+  /** Web uploads carry the picked File through to the final import. */
+  file?: File;
+  /** Desktop imports reference the chosen path over IPC. */
+  path?: string;
+  fileName: string;
+  preview: ImportPreview;
 }
 
 interface BatchDetail extends BatchSummary {
@@ -33,6 +52,16 @@ const mockBatch: BatchSummary = {
   needsReviewCount: 2,
   failedCount: 1,
   createdAt: "2026-07-15T09:30:00+08:00",
+};
+
+const mockHistoryBatch: BatchSummary = {
+  id: "batch-20260710-01",
+  sourceFileName: "上周知乎选题.xlsx",
+  totalCount: 8,
+  completedCount: 8,
+  needsReviewCount: 0,
+  failedCount: 0,
+  createdAt: "2026-07-10T14:12:00+08:00",
 };
 
 const mockTasks: ArticleTask[] = [
@@ -147,8 +176,66 @@ let mockBgm: BgmSettingsView = {
   hasAudio: false,
 };
 
+let mockProcessing: ProcessingSettings = { concurrency: 5 };
+
 function mockDelay<T>(value: T): Promise<T> {
   return new Promise((resolve) => window.setTimeout(() => resolve(value), 180));
+}
+
+function mockTaskDetail(task: ArticleTask): ArticleTaskDetail {
+  const isCompleted = task.status === "completed";
+  return {
+    ...task,
+    attempts: [
+      {
+        id: `${task.id}-attempt-1`,
+        attemptNumber: 1,
+        step: task.step ?? task.status,
+        status: task.status,
+        message: task.failureMessage,
+        createdAt: task.updatedAt,
+      },
+    ],
+    artifacts: isCompleted
+      ? { imageCount: 8, videoReady: true, durationSeconds: 15 }
+      : null,
+  };
+}
+
+function mockBatchDetail(batch: BatchSummary): BatchDetailView {
+  const tasks =
+    batch.id === mockBatch.id
+      ? mockTasks
+      : mockTasks.map((task) => ({
+          ...task,
+          id: `${batch.id}-${task.id}`,
+          batchId: batch.id,
+          status: "completed" as const,
+          step: "completed" as const,
+          progress: 100,
+          failureCode: null,
+          failureMessage: null,
+        }));
+  return {
+    ...batch,
+    status: "processing",
+    tasks,
+    importErrors:
+      batch.id === mockBatch.id
+        ? [
+            {
+              rowNumber: 6,
+              code: "DUPLICATE_URL",
+              message: "与第 2 行链接重复，已跳过。",
+            },
+          ]
+        : [],
+  };
+}
+
+/** Derives the locked tail-note copy for a keyword; mirrors the API helper. */
+export function renderTailNotePreview(articleKeyword: string): string {
+  return `来知乎搜索🔍${articleKeyword.trim()}可以看到全文`;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -160,6 +247,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   return response.json() as Promise<T>;
+}
+
+function importQuery(range: ImportRangeSelection): string {
+  const query = new URLSearchParams();
+  if (range.startRow !== undefined) query.set("startRow", String(range.startRow));
+  if (range.endRow !== undefined) query.set("endRow", String(range.endRow));
+  const text = query.toString();
+  return text ? `?${text}` : "";
 }
 
 export const apiClient = {
@@ -180,44 +275,147 @@ export const apiClient = {
     return { batch, tasks: batch.tasks };
   },
 
-  async importExcel(file?: File): Promise<ImportResult | null> {
-    if (useMockApi) {
-      return mockDelay({ batchId: `batch-${Date.now()}`, createdCount: 12 });
-    }
-
-    if (window.desktop) {
-      const batch = await window.desktop.importExcel();
-      return batch
-        ? { batchId: batch.id, createdCount: batch.totalCount }
-        : null;
-    }
-
-    if (!file) throw new Error("请选择 Excel 文件。");
-
-    const body = new FormData();
-    body.append("file", file);
-    const batch = await request<BatchDetail>("/api/batches/import", {
-      method: "POST",
-      body,
-    });
-    return { batchId: batch.id, createdCount: batch.totalCount };
+  async getBatches(): Promise<BatchSummary[]> {
+    if (useMockApi) return mockDelay([mockBatch, mockHistoryBatch]);
+    if (window.desktop) return window.desktop.listBatches();
+    return request<BatchSummary[]>("/api/batches");
   },
 
-  async updateTailNote(taskId: string, tailNote: string): Promise<ArticleTask> {
+  async getBatch(batchId: string): Promise<BatchDetailView> {
+    if (useMockApi) {
+      const batch = [mockBatch, mockHistoryBatch].find(
+        (candidate) => candidate.id === batchId,
+      );
+      if (!batch) throw new Error("批次不存在。");
+      return mockDelay(mockBatchDetail(batch));
+    }
+    if (window.desktop) return window.desktop.getBatch(batchId);
+    return request<BatchDetailView>(`/api/batches/${batchId}`);
+  },
+
+  async getTask(taskId: string): Promise<ArticleTaskDetail> {
     if (useMockApi) {
       const task = mockTasks.find((candidate) => candidate.id === taskId);
       if (!task) throw new Error("任务不存在。");
-      task.tailNote = tailNote;
+      return mockDelay(mockTaskDetail(task));
+    }
+    if (window.desktop) return window.desktop.getTask(taskId);
+    return request<ArticleTaskDetail>(`/api/tasks/${taskId}`);
+  },
+
+  /**
+   * Two-step import, step 1: parse the chosen workbook without persisting
+   * anything so the operator can pick a row range. Returns null when the
+   * desktop file dialog is cancelled.
+   */
+  async prepareImport(file?: File): Promise<PreparedImport | null> {
+    if (useMockApi) {
+      return mockDelay({
+        file,
+        fileName: file?.name ?? "知乎链接.xlsx",
+        preview: {
+          totalDataRows: 12,
+          validCount: 11,
+          errorCount: 1,
+          sample: mockTasks.slice(0, 5).map((task, index) => ({
+            rowNumber: index + 1,
+            sourceUrl: task.sourceUrl,
+            inputTitle: task.inputTitle,
+            hasKeyword: Boolean(task.articleKeyword),
+          })),
+        },
+      });
+    }
+
+    if (window.desktop) {
+      const path = await window.desktop.selectExcel();
+      if (!path) return null;
+      const preview = await window.desktop.previewImport(path);
+      return { path, fileName: path.split(/[\\/]/).pop() ?? path, preview };
+    }
+
+    if (!file) throw new Error("请选择 Excel 文件。");
+    const body = new FormData();
+    body.append("file", file);
+    const preview = await request<ImportPreview>(
+      "/api/batches/import/preview",
+      { method: "POST", body },
+    );
+    return { file, fileName: file.name, preview };
+  },
+
+  /** Two-step import, step 2: import the chosen rows and create the batch. */
+  async confirmImport(
+    prepared: PreparedImport,
+    range: ImportRangeSelection,
+  ): Promise<ImportResult> {
+    if (useMockApi) {
+      const createdCount =
+        range.startRow !== undefined || range.endRow !== undefined
+          ? Math.max(
+              0,
+              (range.endRow ?? prepared.preview.totalDataRows) -
+                (range.startRow ?? 1) +
+                1,
+            )
+          : prepared.preview.validCount;
+      return mockDelay({ batchId: mockBatch.id, createdCount });
+    }
+
+    if (window.desktop) {
+      if (!prepared.path) throw new Error("请先选择 Excel 文件。");
+      const batch = await window.desktop.importExcel({
+        path: prepared.path,
+        startRow: range.startRow,
+        endRow: range.endRow,
+      });
+      return { batchId: batch.id, createdCount: batch.totalCount };
+    }
+
+    if (!prepared.file) throw new Error("请选择 Excel 文件。");
+    const body = new FormData();
+    body.append("file", prepared.file);
+    const batch = await request<BatchDetail>(
+      `/api/batches/import${importQuery(range)}`,
+      { method: "POST", body },
+    );
+    return { batchId: batch.id, createdCount: batch.totalCount };
+  },
+
+  async updateKeyword(
+    taskId: string,
+    articleKeyword: string,
+  ): Promise<ArticleTask> {
+    if (useMockApi) {
+      const task = mockTasks.find((candidate) => candidate.id === taskId);
+      if (!task) throw new Error("任务不存在。");
+      task.articleKeyword = articleKeyword;
+      task.tailNote = renderTailNotePreview(articleKeyword);
       task.updatedAt = new Date().toISOString();
       return mockDelay({ ...task });
     }
 
-    if (window.desktop) return window.desktop.updateTailNote(taskId, tailNote);
+    if (window.desktop) return window.desktop.updateKeyword(taskId, articleKeyword);
 
     return request<ArticleTask>(`/api/tasks/${taskId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tailNote }),
+      body: JSON.stringify({ articleKeyword }),
+    });
+  },
+
+  async rerenderTail(taskId: string): Promise<ArticleTask> {
+    if (useMockApi) {
+      const task = mockTasks.find((candidate) => candidate.id === taskId);
+      if (!task) throw new Error("任务不存在。");
+      task.updatedAt = new Date().toISOString();
+      return mockDelay({ ...task });
+    }
+
+    if (window.desktop) return window.desktop.rerenderTail(taskId);
+
+    return request<ArticleTask>(`/api/tasks/${taskId}/rerender-tail`, {
+      method: "POST",
     });
   },
 
@@ -249,6 +447,7 @@ export const apiClient = {
   },
 
   async startBatch(batchId: string): Promise<void> {
+    if (useMockApi) return;
     if (window.desktop) {
       await window.desktop.startBatch(batchId);
       return;
@@ -279,6 +478,23 @@ export const apiClient = {
 
   getDownloadUrl(taskId: string, asset: "video" | "images"): string {
     return `${apiBaseUrl}/api/tasks/${taskId}/download/${asset}`;
+  },
+
+  /**
+   * Resolves a displayable cover-image URL for a task. Web builds point at the
+   * streaming endpoint (cache-busted after re-renders); desktop receives the
+   * bytes over IPC and wraps them in an object URL the caller must revoke.
+   */
+  async getPreviewImageSource(taskId: string): Promise<string | null> {
+    if (useMockApi) return null;
+    if (window.desktop) {
+      const asset = await window.desktop.taskPreviewImage(taskId);
+      const blob = new Blob([asset.contents as BlobPart], {
+        type: asset.contentType,
+      });
+      return URL.createObjectURL(blob);
+    }
+    return `${apiBaseUrl}/api/tasks/${taskId}/preview-image?t=${Date.now()}`;
   },
 
   async getBgm(): Promise<BgmSettingsView> {
@@ -371,6 +587,27 @@ export const apiClient = {
     return `${apiBaseUrl}/api/settings/bgm/preview?t=${Date.now()}`;
   },
 
+  async getProcessing(): Promise<ProcessingSettings> {
+    if (useMockApi) return mockDelay({ ...mockProcessing });
+    if (window.desktop) return window.desktop.getProcessing();
+    return request<ProcessingSettings>("/api/settings/processing");
+  },
+
+  async updateProcessing(patch: {
+    concurrency: number;
+  }): Promise<ProcessingSettings> {
+    if (useMockApi) {
+      mockProcessing = { concurrency: patch.concurrency };
+      return mockDelay({ ...mockProcessing });
+    }
+    if (window.desktop) return window.desktop.updateProcessing(patch);
+    return request<ProcessingSettings>("/api/settings/processing", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+  },
+
   getBatchDownloadUrl(batchId: string): string {
     return `${apiBaseUrl}/api/batches/${batchId}/download`;
   },
@@ -383,5 +620,15 @@ export const apiClient = {
 export function isTerminalTaskStatus(status: TaskStatus): boolean {
   return (
     status === "completed" || status === "failed" || status === "needs_review"
+  );
+}
+
+/** True while the worker is actively moving the task through the pipeline. */
+export function isActiveTaskStatus(status: TaskStatus): boolean {
+  return (
+    status === "fetching" ||
+    status === "summarizing" ||
+    status === "rendering_images" ||
+    status === "rendering_video"
   );
 }

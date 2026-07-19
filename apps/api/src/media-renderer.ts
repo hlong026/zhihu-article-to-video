@@ -17,6 +17,10 @@ export interface RenderVideoInput {
   keyword: string;
   /** Optional background-music track mixed under the slideshow. */
   audio?: FfmpegAudioOptions;
+  /** Reports per-card progress (done, total) while PNGs are rasterized. */
+  onImageProgress?: (done: number, total: number) => void;
+  /** Fires once every card is rendered and video encoding begins. */
+  onVideoEncodingStart?: () => void;
 }
 
 export interface RenderedVideoAssets {
@@ -44,13 +48,19 @@ export async function renderVideoAssets(
   await mkdir(input.outputDirectory, { recursive: true });
 
   const writeCards = dependencies.writeCards ?? writeSummaryPngCards;
-  const cards = await writeCards(imageDirectory, input.summary, input.keyword);
+  const cards = await writeCards(
+    imageDirectory,
+    input.summary,
+    input.keyword,
+    input.onImageProgress,
+  );
   const command = buildFfmpegVideoCommand(
     cards.map(({ card }) => card),
     cards.map(({ outputPath }) => outputPath),
     videoPath,
     input.audio,
   );
+  input.onVideoEncodingStart?.();
   await (dependencies.executeFfmpeg ?? executeFfmpeg)(command);
 
   return {

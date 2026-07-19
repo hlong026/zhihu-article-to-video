@@ -1,11 +1,28 @@
-import { FileSpreadsheet, Import, Play, Sparkles, Upload } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
-import type { ArticleTask } from "@zhihu-video/contracts";
+import {
+  FileSpreadsheet,
+  Import,
+  Play,
+  Sparkles,
+  Upload,
+} from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
+import type { ArticleTask, ArticleTaskDetail } from "@zhihu-video/contracts";
 
-import { apiClient, type WorkbenchData } from "../api/client";
+import {
+  apiClient,
+  isTerminalTaskStatus,
+  type ImportRangeSelection,
+  type PreparedImport,
+  type WorkbenchData,
+} from "../api/client";
 import { BgmSettingsCard } from "../components/BgmSettingsCard";
+import { ImportRangeDialog } from "../components/ImportRangeDialog";
+import { ProcessingSettingsCard } from "../components/ProcessingSettingsCard";
 import { TaskTable } from "../components/TaskTable";
 import { WorkbenchPreview } from "../components/WorkbenchPreview";
+
+const POLL_INTERVAL_MS = 2_000;
 
 function getInitialSelectedTask(tasks: ArticleTask[]): ArticleTask | null {
   return tasks.find((task) => task.status === "completed") ?? tasks[0] ?? null;
@@ -33,116 +50,93 @@ export function WorkbenchPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [workbench, setWorkbench] = useState<WorkbenchData | null>(null);
   const [selectedTask, setSelectedTask] = useState<ArticleTask | null>(null);
-  const [tailNote, setTailNote] = useState("");
+  const [selectedDetail, setSelectedDetail] = useState<ArticleTaskDetail | null>(
+    null,
+  );
+  const [keyword, setKeyword] = useState("");
+  // Tracks which task the keyword input is currently editing so background
+  // polling refreshes never clobber an in-progress edit.
+  const keywordTaskIdRef = useRef<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isPreparingImport, setIsPreparingImport] = useState(false);
+  const [preparedImport, setPreparedImport] = useState<PreparedImport | null>(
+    null,
+  );
   const [isImporting, setIsImporting] = useState(false);
-  const [isSavingTailNote, setIsSavingTailNote] = useState(false);
+  const [isSavingKeyword, setIsSavingKeyword] = useState(false);
   const [isSavingManualContent, setIsSavingManualContent] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
 
+  const syncKeyword = useCallback((task: ArticleTask | null) => {
+    if (task && keywordTaskIdRef.current !== task.id) {
+      keywordTaskIdRef.current = task.id;
+      setKeyword(task.articleKeyword ?? "");
+    }
+    if (!task) {
+      keywordTaskIdRef.current = null;
+      setKeyword("");
+    }
+  }, []);
+
+  const refresh = useCallback(async () => {
+    const data = await apiClient.getWorkbench();
+    setWorkbench(data);
+    setSelectedTask((current) => {
+      const next = data
+        ? ((current && data.tasks.find((task) => task.id === current.id)) ??
+          getInitialSelectedTask(data.tasks))
+        : current;
+      syncKeyword(next);
+      return next;
+    });
+  }, [syncKeyword]);
+
   useEffect(() => {
-    void apiClient
-      .getWorkbench()
-      .then((data) => {
-        setWorkbench(data);
-        const task = getInitialSelectedTask(data?.tasks ?? []);
-        setSelectedTask(task);
-        setTailNote(task?.tailNote ?? "");
-      })
+    refresh()
       .catch((error: unknown) =>
         setNotice(error instanceof Error ? error.message : "读取任务失败。"),
       )
       .finally(() => setIsLoading(false));
-  }, []);
+  }, [refresh]);
 
-  function selectTask(task: ArticleTask) {
-    setSelectedTask(task);
-    setTailNote(task.tailNote);
-  }
+  // Poll while any task is still moving; stop once everything is terminal.
+  const hasActiveTasks =
+    workbench?.tasks.some((task) => !isTerminalTaskStatus(task.status)) ??
+    false;
+  useEffect(() => {
+    if (!hasActiveTasks) return;
+    const timer = window.setInterval(() => {
+      refresh().catch(() => undefined);
+    }, POLL_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+  }, [hasActiveTasks, refresh]);
 
-  async function handleImport(file?: File) {
-    if (!window.desktop && !file) return;
-
-    setIsImporting(true);
-    try {
-      const result = await apiClient.importExcel(file);
-      if (!result) return;
-      await apiClient.startBatch(result.batchId);
-      const nextWorkbench = await apiClient.getWorkbench();
-      if (!nextWorkbench) {
-        throw new Error("Excel 已上传，但尚未创建任务批次。");
-      }
-      const nextTask = getInitialSelectedTask(nextWorkbench.tasks);
-      setWorkbench(nextWorkbench);
-      setSelectedTask(nextTask);
-      setTailNote(nextTask?.tailNote ?? "");
-      setNotice(`已导入 ${result.createdCount} 条文章任务，正在创建批次。`);
-    } catch (error) {
-      setNotice(
-        error instanceof Error
-          ? error.message
-          : "导入失败，请检查 Excel 格式。",
-      );
-    } finally {
-      setIsImporting(false);
-      if (fileInputRef.current) fileInputRef.current.value = "";
-    }
-  }
-
-  function openImportDialog(): void {
-    if (window.desktop) {
-      void handleImport();
+  // Load the detail (artifacts + attempt log) for the selected task.
+  const selectedTaskId = selectedTask?.id ?? null;
+  const selectedTaskUpdatedAt = selectedTask?.updatedAt ?? null;
+  useEffect(() => {
+    if (!selectedTaskId) {
+      setSelectedDetail(null);
       return;
     }
-    fileInputRef.current?.click();
-  }
+    let cancelled = false;
+    apiClient
+      .getTask(selectedTaskId)
+      .then((detail) => {
+        if (!cancelled) setSelectedDetail(detail);
+      })
+      .catch(() => {
+        if (!cancelled) setSelectedDetail(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedTaskId, selectedTaskUpdatedAt]);
 
-  async function handleSaveTailNote() {
-    if (!selectedTask) return;
-
-    setIsSavingTailNote(true);
-    try {
-      const updatedTask = await apiClient.updateTailNote(
-        selectedTask.id,
-        tailNote.trim(),
-      );
-      setSelectedTask(updatedTask);
-      setWorkbench((current) =>
-        current
-          ? {
-              ...current,
-              tasks: current.tasks.map((task) =>
-                task.id === updatedTask.id ? updatedTask : task,
-              ),
-            }
-          : current,
-      );
-      setNotice("尾注已保存，当前任务将重新渲染最后一页。");
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "尾注保存失败。");
-    } finally {
-      setIsSavingTailNote(false);
-    }
-  }
-
-  async function handleRetry(task: ArticleTask) {
-    try {
-      const updatedTask = await apiClient.retryTask(task.id);
-      setWorkbench((current) =>
-        current
-          ? {
-              ...current,
-              tasks: current.tasks.map((candidate) =>
-                candidate.id === updatedTask.id ? updatedTask : candidate,
-              ),
-            }
-          : current,
-      );
-      selectTask(updatedTask);
-      setNotice("任务已加入处理队列。");
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "任务重试失败。");
-    }
+  function selectTask(task: ArticleTask) {
+    keywordTaskIdRef.current = task.id;
+    setKeyword(task.articleKeyword ?? "");
+    setSelectedTask(task);
   }
 
   function replaceTask(updatedTask: ArticleTask): void {
@@ -157,6 +151,107 @@ export function WorkbenchPage() {
         : current,
     );
     setSelectedTask(updatedTask);
+  }
+
+  async function beginPrepareImport(file?: File) {
+    if (!window.desktop && !file) return;
+    setIsPreparingImport(true);
+    try {
+      const prepared = await apiClient.prepareImport(file);
+      if (prepared) setPreparedImport(prepared);
+    } catch (error) {
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "Excel 解析失败，请检查文件格式。",
+      );
+    } finally {
+      setIsPreparingImport(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
+
+  function openImportDialog(): void {
+    if (window.desktop) {
+      void beginPrepareImport();
+      return;
+    }
+    fileInputRef.current?.click();
+  }
+
+  async function handleConfirmImport(range: ImportRangeSelection) {
+    if (!preparedImport) return;
+    setIsImporting(true);
+    try {
+      const result = await apiClient.confirmImport(preparedImport, range);
+      await apiClient.startBatch(result.batchId);
+      await refresh();
+      setPreparedImport(null);
+      setNotice(
+        `已导入 ${result.createdCount} 条文章任务，批次已开始处理。`,
+      );
+    } catch (error) {
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "导入失败，请检查 Excel 格式。",
+      );
+    } finally {
+      setIsImporting(false);
+    }
+  }
+
+  async function handleSaveKeyword() {
+    if (!selectedTask) return;
+    const nextKeyword = keyword.trim();
+    if (nextKeyword.length < 2) {
+      setNotice("口令至少需要 2 个字符。");
+      return;
+    }
+
+    setIsSavingKeyword(true);
+    try {
+      const updatedTask = await apiClient.updateKeyword(
+        selectedTask.id,
+        nextKeyword,
+      );
+      replaceTask(updatedTask);
+      syncKeyword(updatedTask);
+
+      if (
+        updatedTask.status === "completed" ||
+        updatedTask.status === "needs_review"
+      ) {
+        try {
+          const rerendered = await apiClient.rerenderTail(updatedTask.id);
+          replaceTask(rerendered);
+          setNotice("口令已保存，尾页与视频已按新口令重新渲染。");
+        } catch (error) {
+          setNotice(
+            `口令已保存，但尾页重渲失败（${
+              error instanceof Error ? error.message : "未知错误"
+            }），可稍后重试。`,
+          );
+        }
+      } else {
+        setNotice("口令已保存，任务生成尾页时将使用新口令。");
+      }
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "口令保存失败。");
+    } finally {
+      setIsSavingKeyword(false);
+    }
+  }
+
+  async function handleRetry(task: ArticleTask) {
+    try {
+      const updatedTask = await apiClient.retryTask(task.id);
+      replaceTask(updatedTask);
+      syncKeyword(updatedTask);
+      setNotice("任务已加入处理队列。");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "任务重试失败。");
+    }
   }
 
   async function handleSaveManualContent(title: string, content: string) {
@@ -210,15 +305,13 @@ export function WorkbenchPage() {
     return <div className="page-loading">正在加载当前批次…</div>;
   }
 
-  const pendingCount =
-    workbench?.tasks.filter(
-      (task) =>
-        task.status === "pending" ||
-        task.status === "fetching" ||
-        task.status === "summarizing" ||
-        task.status === "rendering_images" ||
-        task.status === "rendering_video",
-    ).length ?? 0;
+  const tasks = workbench?.tasks ?? [];
+  const pendingCount = tasks.filter(
+    (task) => !isTerminalTaskStatus(task.status),
+  ).length;
+  const terminalCount = tasks.length - pendingCount;
+  const overallPercent =
+    tasks.length > 0 ? Math.round((terminalCount / tasks.length) * 100) : 0;
 
   return (
     <div className="workbench-page">
@@ -237,16 +330,18 @@ export function WorkbenchPage() {
             id="excel-import"
             type="file"
             accept=".xlsx,.xls"
-            onChange={(event) => void handleImport(event.target.files?.[0])}
+            onChange={(event) =>
+              void beginPrepareImport(event.target.files?.[0])
+            }
           />
           <button
             type="button"
             className="button button-dark import-button"
             onClick={openImportDialog}
-            disabled={isImporting}
+            disabled={isPreparingImport || isImporting}
           >
             <Import size={17} />
-            {isImporting ? "正在导入…" : "导入 Excel"}
+            {isPreparingImport ? "正在解析…" : "导入 Excel"}
           </button>
         </div>
       </header>
@@ -266,6 +361,7 @@ export function WorkbenchPage() {
       ) : null}
 
       <BgmSettingsCard onNotice={setNotice} />
+      <ProcessingSettingsCard onNotice={setNotice} />
 
       {workbench && selectedTask ? (
         <>
@@ -282,8 +378,32 @@ export function WorkbenchPage() {
                   当前批次
                 </p>
                 <strong>{workbench.batch.sourceFileName}</strong>
-                <span>{workbench.batch.totalCount} 篇文章 · 已开始处理</span>
+                <span>{workbench.batch.totalCount} 篇文章</span>
               </div>
+            </div>
+            <div className="batch-overall">
+              <div className="batch-overall-label">
+                <span>总体进度</span>
+                <strong>
+                  {terminalCount}/{tasks.length}（{overallPercent}%）
+                </strong>
+              </div>
+              <div
+                className="batch-overall-track"
+                role="progressbar"
+                aria-valuenow={overallPercent}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-label="批次总体进度"
+              >
+                <i style={{ width: `${overallPercent}%` }} />
+              </div>
+              <Link
+                className="text-button"
+                to={`/history/${workbench.batch.id}`}
+              >
+                查看详情
+              </Link>
             </div>
             <div className="metrics-row">
               <MetricCard label="待处理" value={pendingCount} tone="neutral" />
@@ -310,11 +430,12 @@ export function WorkbenchPage() {
             />
             <WorkbenchPreview
               task={selectedTask}
-              tailNote={tailNote}
-              isSaving={isSavingTailNote}
+              detail={selectedDetail}
+              keyword={keyword}
+              isSavingKeyword={isSavingKeyword}
               isSavingManualContent={isSavingManualContent}
-              onTailNoteChange={setTailNote}
-              onSaveTailNote={() => void handleSaveTailNote()}
+              onKeywordChange={setKeyword}
+              onSaveKeyword={() => void handleSaveKeyword()}
               onSaveManualContent={(title, content) =>
                 void handleSaveManualContent(title, content)
               }
@@ -353,6 +474,15 @@ export function WorkbenchPage() {
           </button>
         </section>
       )}
+
+      {preparedImport ? (
+        <ImportRangeDialog
+          prepared={preparedImport}
+          isImporting={isImporting}
+          onConfirm={(range) => void handleConfirmImport(range)}
+          onCancel={() => setPreparedImport(null)}
+        />
+      ) : null}
     </div>
   );
 }

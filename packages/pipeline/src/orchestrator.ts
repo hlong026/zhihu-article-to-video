@@ -132,6 +132,9 @@ export async function buildPreparedVideo(
     pages,
     truncated,
     riskFlags,
+    // Manual content has no page metadata; the cover then keeps its
+    // tags-only fallback layout.
+    coverMeta: content.meta ?? null,
   };
   const validation = validateVideoSummary(summary, {
     hasVerifiedKeyword: Boolean(input.articleKeyword?.trim()),

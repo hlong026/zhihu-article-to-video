@@ -1,71 +1,68 @@
-import { Download, Expand, Pause, Volume2 } from "lucide-react";
-import type { ArticleTask } from "@zhihu-video/contracts";
+import { AlertTriangle, Download, Wrench } from "lucide-react";
+import type { ArticleTask, ArticleTaskDetail } from "@zhihu-video/contracts";
 
+import { renderTailNotePreview } from "../api/client";
 import { ManualContentEditor } from "./ManualContentEditor";
+import { AttemptTimeline, TaskPreviewMedia } from "./TaskPreviewMedia";
 
 interface WorkbenchPreviewProps {
   task: ArticleTask;
-  tailNote: string;
-  isSaving: boolean;
+  detail: ArticleTaskDetail | null;
+  keyword: string;
+  isSavingKeyword: boolean;
   isSavingManualContent: boolean;
-  onTailNoteChange: (value: string) => void;
-  onSaveTailNote: () => void;
+  onKeywordChange: (value: string) => void;
+  onSaveKeyword: () => void;
   onSaveManualContent: (title: string, content: string) => void;
   onDownload: (asset: "video" | "images") => void;
 }
 
+/**
+ * Right-hand panel for the selected task: real rendered preview, manual
+ * content fallback, and the keyword editor. The tail-note format is locked —
+ * only the keyword itself is editable; the note copy is always derived.
+ */
 export function WorkbenchPreview({
   task,
-  tailNote,
-  isSaving,
+  detail,
+  keyword,
+  isSavingKeyword,
   isSavingManualContent,
-  onTailNoteChange,
-  onSaveTailNote,
+  onKeywordChange,
+  onSaveKeyword,
   onSaveManualContent,
   onDownload,
 }: WorkbenchPreviewProps) {
-  const title = task.finalTitle ?? task.inputTitle ?? "正在准备内容";
+  const title =
+    task.finalTitle ?? task.fetchedTitle ?? task.inputTitle ?? "正在准备内容";
+  const trimmedKeyword = keyword.trim();
+  const keywordLength = Array.from(trimmedKeyword).length;
+  const keywordValid = keywordLength >= 2 && keywordLength <= 30;
+  const keywordDirty = trimmedKeyword !== (task.articleKeyword ?? "");
+  // Dirty-data detector: the stored note disagrees with the locked format.
+  const expectedTailNote = task.articleKeyword
+    ? renderTailNotePreview(task.articleKeyword)
+    : null;
+  const tailNoteMismatch =
+    expectedTailNote !== null && task.tailNote !== expectedTailNote;
 
   return (
     <aside className="preview-panel" aria-label="当前任务预览">
       <div className="preview-heading">
         <div>
           <p className="eyebrow">当前任务</p>
-          <h2>成片预览</h2>
+          <h2>{title}</h2>
         </div>
-        <span className="page-indicator">01 / 08</span>
       </div>
 
-      <div className="video-frame" aria-label="3:4 视频预览画布">
-        <div className="video-shine" />
-        <div className="video-source">来自 知乎</div>
-        <div className="video-copy">
-          <p className="video-kicker">知乎文章 · 图文视频</p>
-          <h3>{title}</h3>
-          <p>真正拉开差距的，不是某个功能，而是用户是否愿意持续使用。</p>
-        </div>
-        <div className="video-progress">
-          <span />
-        </div>
-        <div className="video-controls" aria-label="视频控制">
-          <button type="button" aria-label="暂停预览" className="icon-button">
-            <Pause size={15} fill="currentColor" />
-          </button>
-          <span>00:01 / 00:08</span>
-          <button type="button" aria-label="静音开关" className="icon-button">
-            <Volume2 size={16} />
-          </button>
-          <button type="button" aria-label="全屏预览" className="icon-button">
-            <Expand size={16} />
-          </button>
-        </div>
-      </div>
+      <TaskPreviewMedia task={task} detail={detail} />
 
       <div className="preview-downloads">
         <button
           type="button"
           className="button button-primary"
           onClick={() => onDownload("video")}
+          disabled={task.status !== "completed"}
         >
           <Download size={16} />
           下载视频
@@ -74,6 +71,7 @@ export function WorkbenchPreview({
           type="button"
           className="button button-secondary"
           onClick={() => onDownload("images")}
+          disabled={task.status !== "completed"}
         >
           <Download size={16} />
           下载图片
@@ -86,32 +84,76 @@ export function WorkbenchPreview({
         onSave={onSaveManualContent}
       />
 
-      <section className="tail-note-editor" aria-labelledby="tail-note-title">
+      <section className="tail-note-editor" aria-labelledby="keyword-editor-title">
         <div className="section-title-row">
           <div>
             <p className="eyebrow">最后一页</p>
-            <h3 id="tail-note-title">尾注引导</h3>
+            <h3 id="keyword-editor-title">文章口令</h3>
           </div>
-          <span className="character-count">{tailNote.length}/60</span>
+          <span className="character-count">{keywordLength}/30</span>
         </div>
-        <textarea
-          aria-label="尾注内容"
-          value={tailNote}
-          maxLength={60}
-          onChange={(event) => onTailNoteChange(event.target.value)}
+
+        <input
+          type="text"
+          className="keyword-input"
+          aria-label="文章口令"
+          placeholder="输入 2~30 个字符的文章口令"
+          value={keyword}
+          maxLength={30}
+          onChange={(event) => onKeywordChange(event.target.value)}
         />
+
+        <p className="tail-note-preview" aria-live="polite">
+          {trimmedKeyword
+            ? renderTailNotePreview(trimmedKeyword)
+            : "来知乎搜索🔍{文章口令}可以看到全文"}
+        </p>
+
+        {!trimmedKeyword ? (
+          <p className="keyword-warning" role="note">
+            <AlertTriangle size={14} />
+            缺少口令，任务需人工确认后才能生成尾页。
+          </p>
+        ) : null}
+
+        {tailNoteMismatch ? (
+          <div className="keyword-warning keyword-mismatch" role="alert">
+            <AlertTriangle size={14} />
+            <span>
+              当前尾注「{task.tailNote}」与口令不一致。
+            </span>
+            <button
+              type="button"
+              className="text-button action-emphasis"
+              onClick={onSaveKeyword}
+              disabled={isSavingKeyword || !keywordDirty}
+            >
+              <Wrench size={13} />
+              一键修复
+            </button>
+          </div>
+        ) : null}
+
         <p className="field-hint">
-          保存后只重新渲染当前任务的尾页，不会重新读取文章。
+          尾注格式已锁定，只保存口令本身；已完成任务保存后会自动重新渲染尾页与视频。
         </p>
         <button
           type="button"
           className="button button-dark full-width"
-          onClick={onSaveTailNote}
-          disabled={isSaving || tailNote.trim().length === 0}
+          onClick={onSaveKeyword}
+          disabled={isSavingKeyword || !keywordValid || !keywordDirty}
         >
-          {isSaving ? "正在保存…" : "保存并重新渲染尾页"}
+          {isSavingKeyword
+            ? "正在保存…"
+            : task.status === "completed"
+              ? "保存口令并重渲尾页"
+              : "保存口令"}
         </button>
       </section>
+
+      {task.status === "failed" || task.status === "needs_review" ? (
+        <AttemptTimeline detail={detail} />
+      ) : null}
     </aside>
   );
 }

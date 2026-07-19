@@ -1,3 +1,4 @@
+import type { SourcePageMeta } from "./source.js";
 import type { VideoSummary } from "./summary.js";
 
 export const cardCanvas = { width: 1080, height: 1920 } as const;
@@ -19,6 +20,11 @@ export interface CoverCardRenderModel extends BaseCardRenderModel {
   tags: string[];
   /** First lines of the article body, shown under the title like Zhihu's card. */
   preview: string[];
+  /**
+   * Question-header metadata (author block + counters) rendered between the
+   * meta line and the preview; null keeps the legacy tags-only cover.
+   */
+  meta: SourcePageMeta | null;
 }
 
 export interface BodyCardRenderModel extends BaseCardRenderModel {
@@ -77,6 +83,7 @@ export function buildCardSequence(
     title: summary.videoTitle,
     tags: summary.tags,
     preview: previewLines,
+    meta: summary.coverMeta ?? null,
     text: summary.videoTitle,
   };
   const bodyCards: BodyCardRenderModel[] = summary.pages.map((page, index) => ({

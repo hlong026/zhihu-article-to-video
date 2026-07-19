@@ -8,11 +8,29 @@ export interface UrlClassification {
 export interface RawReadableContent {
   title: string;
   paragraphs: string[];
+  meta?: SourcePageMeta | null;
 }
 
 export interface CleanReadableContent {
   title: string;
   paragraphs: string[];
+  meta?: SourcePageMeta | null;
+}
+
+/**
+ * Optional Zhihu page metadata rendered on the cover card: the author block
+ * and the question-header counters. Counts keep their original display text
+ * (e.g. "433" or "1.2万") so no locale number parsing is involved. Every
+ * field degrades to null when the page layout does not provide it, and the
+ * cover simply skips the missing pieces.
+ */
+export interface SourcePageMeta {
+  authorName: string | null;
+  authorBadge: string | null;
+  answerCount: string | null;
+  followCount: string | null;
+  /** Ready-to-embed data URI of the author's avatar image, when downloaded. */
+  avatarDataUri: string | null;
 }
 
 export interface SourceReadFailure {
@@ -119,6 +137,7 @@ export function cleanReadableContent(
   return {
     title: normalizeWhitespace(simplifyMathMarkup(raw.title)),
     paragraphs,
+    meta: raw.meta ?? null,
   };
 }
 
