@@ -18,8 +18,8 @@ contextBridge.exposeInMainWorld("desktop", {
   }) => ipcRenderer.invoke("desktop:import-excel", input),
   startBatch: (batchId: string) =>
     ipcRenderer.invoke("desktop:start-batch", batchId),
-  updateKeyword: (taskId: string, articleKeyword: string) =>
-    ipcRenderer.invoke("desktop:update-keyword", { taskId, articleKeyword }),
+  updateKeyword: (taskId: string, articleKeyword: string, tailNoteTemplate?: string) =>
+    ipcRenderer.invoke("desktop:update-keyword", { taskId, articleKeyword, tailNoteTemplate }),
   rerenderTail: (taskId: string) =>
     ipcRenderer.invoke("desktop:rerender-tail", taskId),
   saveManualContent: (taskId: string, title: string, content: string) =>

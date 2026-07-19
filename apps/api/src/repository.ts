@@ -158,6 +158,7 @@ function toTask(row: TaskRow): ArticleTask {
     finalTitle: row.final_title,
     finalTags: JSON.parse(row.final_tags_json) as string[],
     tailNote: row.tail_note,
+    tailNoteTemplate: row.tail_note_template,
     status: row.status,
     step: (row.current_step ?? row.status) as TaskStatus,
     progress: row.progress,

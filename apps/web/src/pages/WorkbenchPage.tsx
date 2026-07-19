@@ -62,6 +62,7 @@ export function WorkbenchPage() {
     null,
   );
   const [keyword, setKeyword] = useState("");
+  const [tailTemplate, setTailTemplate] = useState("");
   const keywordTaskIdRef = useRef<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isPreparingImport, setIsPreparingImport] = useState(false);
@@ -80,10 +81,12 @@ export function WorkbenchPage() {
     if (task && keywordTaskIdRef.current !== task.id) {
       keywordTaskIdRef.current = task.id;
       setKeyword(task.articleKeyword ?? "");
+      setTailTemplate(task.tailNoteTemplate ?? "来知乎搜索🔍{文章口令}可以看到全文");
     }
     if (!task) {
       keywordTaskIdRef.current = null;
       setKeyword("");
+      setTailTemplate("");
     }
   }, []);
 
@@ -146,6 +149,7 @@ export function WorkbenchPage() {
   function selectTask(task: ArticleTask) {
     keywordTaskIdRef.current = task.id;
     setKeyword(task.articleKeyword ?? "");
+    setTailTemplate(task.tailNoteTemplate ?? "来知乎搜索🔍{文章口令}可以看到全文");
     setSelectedTask(task);
   }
 
@@ -221,12 +225,14 @@ export function WorkbenchPage() {
       toast("口令至少需要 2 个字符。", "error");
       return;
     }
+    const nextTemplate = tailTemplate.trim() || undefined;
 
     setIsSavingKeyword(true);
     try {
       const updatedTask = await apiClient.updateKeyword(
         selectedTask.id,
         nextKeyword,
+        nextTemplate,
       );
       replaceTask(updatedTask);
       syncKeyword(updatedTask);
@@ -238,20 +244,20 @@ export function WorkbenchPage() {
         try {
           const rerendered = await apiClient.rerenderTail(updatedTask.id);
           replaceTask(rerendered);
-          toast("口令已保存，尾页与视频已按新口令重新渲染。", "success");
+          toast("已保存，尾页与视频已按新配置重新渲染。", "success");
         } catch (error) {
           toast(
-            `口令已保存，但尾页重渲失败（${
+            `已保存，但尾页重渲失败（${
               error instanceof Error ? error.message : "未知错误"
             }），可稍后重试。`,
             "error",
           );
         }
       } else {
-        toast("口令已保存，任务生成尾页时将使用新口令。", "success");
+        toast("已保存，任务生成尾页时将使用新配置。", "success");
       }
     } catch (error) {
-      toast(error instanceof Error ? error.message : "口令保存失败。", "error");
+      toast(error instanceof Error ? error.message : "保存失败。", "error");
     } finally {
       setIsSavingKeyword(false);
     }
@@ -520,9 +526,11 @@ export function WorkbenchPage() {
               task={selectedTask}
               detail={selectedDetail}
               keyword={keyword}
+              tailTemplate={tailTemplate}
               isSavingKeyword={isSavingKeyword}
               isSavingManualContent={isSavingManualContent}
               onKeywordChange={setKeyword}
+              onTailTemplateChange={setTailTemplate}
               onSaveKeyword={() => void handleSaveKeyword()}
               onSaveManualContent={(title, content) =>
                 void handleSaveManualContent(title, content)

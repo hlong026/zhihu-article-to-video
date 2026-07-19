@@ -29,6 +29,7 @@ import {
 import { parseImportWorkbook } from "./importer.js";
 import { OpenAiCompatibleSummaryGenerator, defaultAiBaseUrl, defaultAiModel, resolveAiConfiguration } from "./openai-summary.js";
 import { resolveBrowserLaunch } from "./browser-resolver.js";
+import { resolveFfmpegExecutable } from "./ffmpeg-resolver.js";
 import {
   DEFAULT_BGM_SETTINGS,
   TaskRepository,
@@ -129,6 +130,8 @@ export interface BuildAppOptions {
   outputDirectory?: string;
   /** Absolute path of the Chromium executable bundled with the desktop app. */
   bundledChromiumExecutable?: string;
+  /** Absolute path of the FFmpeg executable bundled with the desktop app. */
+  bundledFfmpegExecutable?: string;
 }
 
 export function buildApp(options: BuildAppOptions): FastifyInstance {
@@ -183,6 +186,11 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
           ),
       })
     : null;
+  const ffmpegExecutable = resolveFfmpegExecutable(
+    options.bundledFfmpegExecutable ??
+      process.env.ZHIHU_BUNDLED_FFMPEG_EXECUTABLE?.trim() ??
+      undefined,
+  );
   const taskWorker =
     options.taskWorker ??
     (contentReader && options.outputDirectory
@@ -192,6 +200,7 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
             resolveAiConfiguration(repository.getAiSettings()),
           ),
           outputDirectory: options.outputDirectory,
+          ffmpegExecutable,
           resolveAudio: () =>
             resolveAudioOptions(
               repository.getBgmSettings(),

@@ -1292,6 +1292,25 @@ textarea:focus {
   border-color: #6aaa7a;
   box-shadow: 0 0 0 3px rgb(72 151 91 / 10%);
 }
+.tail-template-input {
+  resize: vertical;
+  min-height: 44px;
+  font-family: inherit;
+  line-height: 1.5;
+}
+.field-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 10px 0 6px;
+  color: #536055;
+  font-size: 12px;
+  font-weight: 620;
+}
+.field-label .character-count {
+  color: #9aa39a;
+  font-weight: 400;
+}
 .tail-note-preview {
   margin: 10px 0 0;
   padding: 9px 11px;

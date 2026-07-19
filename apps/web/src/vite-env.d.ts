@@ -32,6 +32,7 @@ declare global {
       updateKeyword(
         taskId: string,
         articleKeyword: string,
+        tailNoteTemplate?: string,
       ): Promise<ArticleTask>;
       rerenderTail(taskId: string): Promise<ArticleTask>;
       saveManualContent(

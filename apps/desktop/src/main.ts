@@ -119,7 +119,7 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle("desktop:update-keyword", async (_event, input: unknown) => {
     if (!isKeywordUpdate(input)) throw new Error("口令参数无效。");
-    return requireApi().updateKeyword(input.taskId, input.articleKeyword);
+    return requireApi().updateKeyword(input.taskId, input.articleKeyword, input.tailNoteTemplate);
   });
 
   ipcMain.handle("desktop:rerender-tail", async (_event, taskId: unknown) => {
@@ -337,14 +337,17 @@ function isImportRequest(
 
 function isKeywordUpdate(
   value: unknown,
-): value is { taskId: string; articleKeyword: string } {
+): value is { taskId: string; articleKeyword: string; tailNoteTemplate?: string } {
   return (
     typeof value === "object" &&
     value !== null &&
     "taskId" in value &&
     "articleKeyword" in value &&
     typeof value.taskId === "string" &&
-    typeof value.articleKeyword === "string"
+    typeof value.articleKeyword === "string" &&
+    (!("tailNoteTemplate" in value) ||
+      typeof (value as Record<string, unknown>).tailNoteTemplate === "string" ||
+      (value as Record<string, unknown>).tailNoteTemplate === undefined)
   );
 }
 
@@ -419,6 +422,32 @@ function getBundledChromiumExecutable(): string | undefined {
   }
 }
 
+/**
+ * Locates the FFmpeg bundled by package-desktop.mjs. The manifest lives
+ * next to the staged API (resources/app/api/ffmpeg) and records the
+ * executable filename; absent in dev runs, where the resolver falls back
+ * to the system PATH.
+ */
+function getBundledFfmpegExecutable(): string | undefined {
+  const manifestPath = join(
+    currentDirectory,
+    "api",
+    "ffmpeg",
+    "manifest.json",
+  );
+  try {
+    if (!existsSync(manifestPath)) return undefined;
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
+      executable?: string;
+    };
+    if (!manifest.executable) return undefined;
+    const executablePath = join(dirname(manifestPath), manifest.executable);
+    return existsSync(executablePath) ? executablePath : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 app
   .whenReady()
   .then(async () => {
@@ -429,6 +458,7 @@ app
       appDataDirectory: app.getPath("userData"),
       apiModulePath: getApiModulePath(),
       bundledChromiumExecutable: getBundledChromiumExecutable(),
+      bundledFfmpegExecutable: getBundledFfmpegExecutable(),
     });
     registerIpcHandlers();
     createWindow();

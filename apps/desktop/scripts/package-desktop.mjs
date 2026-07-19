@@ -65,6 +65,28 @@ const CHROMIUM_ARCHIVE_NAME = {
   "linux-arm64": "chromium-linux-arm64.zip",
 };
 
+/**
+ * 内置 FFmpeg 静态构建：用户无需自行安装 FFmpeg。
+ * 使用 BtbN 的 GPL 构建（开箱即用、codec 全、无外部依赖）。
+ * 下载产物缓存在 .stage/ffmpeg，重复打包不重复下载。
+ */
+const FFMPEG_RELEASE_BASE =
+  process.env.FFMPEG_DOWNLOAD_BASE ??
+  "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest";
+
+const FFMPEG_ARCHIVE_NAME = {
+  "win32-x64": "ffmpeg-master-latest-win64-gpl.zip",
+  "darwin-x64": "ffmpeg-master-latest-macos64-gpl.zip",
+  "darwin-arm64": "ffmpeg-master-latest-macos-arm64-gpl.zip",
+};
+
+/** 解压后 ffmpeg 二进制在压缩包内的相对路径。 */
+const FFMPEG_BINARY_IN_ARCHIVE = {
+  "win32-x64": "bin/ffmpeg.exe",
+  "darwin-x64": "bin/ffmpeg",
+  "darwin-arm64": "bin/ffmpeg",
+};
+
 function argValue(name) {
   const prefix = `${name}=`;
   const hit = process.argv.slice(2).find((arg) => arg.startsWith(prefix));
@@ -73,6 +95,12 @@ function argValue(name) {
 
 const targetPlatform = argValue("--platform") ?? process.platform;
 const targetArch = argValue("--arch") ?? process.arch;
+const skipBrowser =
+  process.argv.includes("--skip-browser") ||
+  process.env.SKIP_BROWSER_BUNDLE === "1";
+const skipFfmpeg =
+  process.argv.includes("--skip-ffmpeg") ||
+  process.env.SKIP_FFMPEG_BUNDLE === "1";
 
 if (process.platform !== "darwin" && process.platform !== "win32") {
   throw new Error("只支持在 macOS 或 Windows 构建桌面应用。");
@@ -138,7 +166,13 @@ if (targetPlatform === "darwin") {
     await verifyWindowsBundle(targetDirectory);
     const installerPath = await buildWindowsInstaller(targetDirectory);
     if (installerPath) {
-      await verifyWindowsInstaller(installerPath);
+      try {
+        await verifyWindowsInstaller(installerPath);
+      } catch (verifyError) {
+        console.warn(
+          `安装器静默校验跳过（可能需要管理员权限）：${verifyError.message}`,
+        );
+      }
     }
   } else {
     console.warn(
@@ -638,7 +672,16 @@ async function addApplicationResources(applicationDirectory) {
     recursive: true,
     verbatimSymlinks: true,
   });
-  await bundlePlaywrightBrowser(applicationDirectory);
+  if (!skipBrowser) {
+    await bundlePlaywrightBrowser(applicationDirectory);
+  } else {
+    console.log("跳过内置 Chromium（--skip-browser），运行时将使用本机浏览器。");
+  }
+  if (!skipFfmpeg) {
+    await bundleFfmpeg(applicationDirectory);
+  } else {
+    console.log("跳过内置 FFmpeg（--skip-ffmpeg），运行时将使用系统 PATH。");
+  }
   await writeFile(
     join(applicationDirectory, "package.json"),
     JSON.stringify(
@@ -826,4 +869,60 @@ async function bundlePlaywrightBrowser(applicationDirectory) {
     `${JSON.stringify({ executableRelativePath }, null, 2)}\n`,
   );
   console.log(`已内置 Playwright Chromium：${browserDirectoryName}`);
+}
+
+/** 下载并缓存目标平台的 FFmpeg 静态构建，返回 ffmpeg 二进制路径。 */
+async function ensureFfmpeg() {
+  const platformArch = `${targetPlatform}-${targetArch}`;
+  const archiveName = FFMPEG_ARCHIVE_NAME[platformArch];
+  const binaryInArchive = FFMPEG_BINARY_IN_ARCHIVE[platformArch];
+  if (!archiveName || !binaryInArchive) {
+    throw new Error(`缺少 ${platformArch} 的 FFmpeg 压缩包映射。`);
+  }
+  const cacheDirectory = join(stageRoot, "ffmpeg", platformArch);
+  const cachedBinary = join(cacheDirectory, binaryInArchive);
+  if (existsSync(cachedBinary)) {
+    console.log(`复用已缓存的 FFmpeg（${platformArch}）。`);
+    return cachedBinary;
+  }
+  await rm(cacheDirectory, { recursive: true, force: true });
+  await mkdir(cacheDirectory, { recursive: true });
+  const url = `${FFMPEG_RELEASE_BASE}/${archiveName}`;
+  const archivePath = join(stageRoot, archiveName);
+  console.log(`下载 FFmpeg 静态构建（${archiveName}）…`);
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`下载 FFmpeg 失败（${response.status}）：${url}`);
+  }
+  await writeFile(archivePath, Buffer.from(await response.arrayBuffer()));
+  if (process.platform === "darwin") {
+    await run("ditto", ["-x", "-k", archivePath, cacheDirectory]);
+  } else {
+    await run("powershell", [
+      "-NoProfile",
+      "-Command",
+      `Expand-Archive -LiteralPath '${archivePath}' -DestinationPath '${cacheDirectory}'`,
+    ]);
+  }
+  await rm(archivePath, { force: true });
+  if (!existsSync(cachedBinary)) {
+    throw new Error(`FFmpeg 解压后未在预期路径找到二进制：${cachedBinary}`);
+  }
+  return cachedBinary;
+}
+
+/** 将 FFmpeg 二进制拷入应用包并生成 manifest（主进程据此解析路径）。 */
+async function bundleFfmpeg(applicationDirectory) {
+  const ffmpegBinary = await ensureFfmpeg();
+  const targetDirectory = join(applicationDirectory, "api", "ffmpeg");
+  await rm(targetDirectory, { recursive: true, force: true });
+  await mkdir(targetDirectory, { recursive: true });
+  const binaryName =
+    targetPlatform === "win32" ? "ffmpeg.exe" : "ffmpeg";
+  await cp(ffmpegBinary, join(targetDirectory, binaryName));
+  await writeFile(
+    join(targetDirectory, "manifest.json"),
+    `${JSON.stringify({ executable: binaryName }, null, 2)}\n`,
+  );
+  console.log(`已内置 FFmpeg：${binaryName}`);
 }

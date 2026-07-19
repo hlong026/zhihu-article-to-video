@@ -41,6 +41,8 @@ export interface ArticleTask {
   finalTitle: string | null;
   finalTags: string[];
   tailNote: string;
+  /** Editable template for the tail page CTA; {文章口令} is interpolated at render time. */
+  tailNoteTemplate: string;
   status: TaskStatus;
   step: TaskStatus;
   progress: number;

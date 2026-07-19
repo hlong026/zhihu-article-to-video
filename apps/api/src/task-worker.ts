@@ -34,6 +34,8 @@ export class TaskWorker {
        * serial internally, so concurrency only widens AI calls and rendering.
        */
       resolveConcurrency?: () => number;
+      /** Resolved FFmpeg executable path (bundled or system). */
+      ffmpegExecutable?: string;
     },
   ) {}
 
@@ -110,6 +112,8 @@ export class TaskWorker {
         // A "ready" result implies the keyword was verified by the pipeline.
         keyword: task.articleKeyword!,
         audio: this.dependencies.resolveAudio?.() ?? undefined,
+        ffmpegExecutable: this.dependencies.ffmpegExecutable,
+        tailTemplate: task.tailNoteTemplate,
         onImageProgress: (done, total) =>
           this.repository.reportTaskProgress(
             taskId,
@@ -217,6 +221,8 @@ export class TaskWorker {
         summary,
         keyword,
         audio: this.dependencies.resolveAudio?.() ?? undefined,
+        ffmpegExecutable: this.dependencies.ffmpegExecutable,
+        tailTemplate: task.tailNoteTemplate,
         onImageProgress: (done, total) =>
           this.repository.reportTaskProgress(
             taskId,

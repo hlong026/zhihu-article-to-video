@@ -87,4 +87,10 @@ function migrate(database: SqliteDatabase): void {
   if (!taskColumns.has("raw_content_path")) {
     database.exec("ALTER TABLE article_tasks ADD COLUMN raw_content_path TEXT");
   }
+  // 旧库迁移：尾页文案模板列。NOT NULL 列必须带默认值才能加到已有数据的表。
+  if (!taskColumns.has("tail_note_template")) {
+    database.exec(
+      "ALTER TABLE article_tasks ADD COLUMN tail_note_template TEXT NOT NULL DEFAULT '来知乎搜索🔍{文章口令}可以看到全文'",
+    );
+  }
 }

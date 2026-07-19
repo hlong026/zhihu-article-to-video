@@ -78,6 +78,7 @@ const mockTasks: ArticleTask[] = [
     finalTitle: "AI 产品真正难的，不是模型能力",
     finalTags: ["AI产品", "产品思考", "用户体验"],
     tailNote: "来知乎搜索🔍AI 产品好用可以看到全文",
+    tailNoteTemplate: "来知乎搜索🔍{文章口令}可以看到全文",
     status: "completed",
     step: "completed",
     progress: 100,
@@ -97,6 +98,7 @@ const mockTasks: ArticleTask[] = [
     finalTitle: "大模型改变的，是学习的反馈速度",
     finalTags: ["大模型", "学习方法", "个人成长"],
     tailNote: "来知乎搜索🔍大模型学习方式可以看到全文",
+    tailNoteTemplate: "来知乎搜索🔍{文章口令}可以看到全文",
     status: "rendering_video",
     step: "rendering_video",
     progress: 82,
@@ -116,6 +118,7 @@ const mockTasks: ArticleTask[] = [
     finalTitle: "稳定输出，靠的不是灵感",
     finalTags: ["内容创作", "个人品牌"],
     tailNote: "来知乎搜索🔍{文章口令}可以看到全文",
+    tailNoteTemplate: "来知乎搜索🔍{文章口令}可以看到全文",
     status: "needs_review",
     step: "needs_review",
     progress: 68,
@@ -135,6 +138,7 @@ const mockTasks: ArticleTask[] = [
     finalTitle: null,
     finalTags: [],
     tailNote: "来知乎搜索🔍值得讲的问题可以看到全文",
+    tailNoteTemplate: "来知乎搜索🔍{文章口令}可以看到全文",
     status: "failed",
     step: "failed",
     progress: 12,
@@ -154,6 +158,7 @@ const mockTasks: ArticleTask[] = [
     finalTitle: null,
     finalTags: [],
     tailNote: "来知乎搜索🔍有效复盘可以看到全文",
+    tailNoteTemplate: "来知乎搜索🔍{文章口令}可以看到全文",
     status: "pending",
     step: "pending",
     progress: 0,
@@ -243,9 +248,13 @@ function mockBatchDetail(batch: BatchSummary): BatchDetailView {
   };
 }
 
-/** Derives the locked tail-note copy for a keyword; mirrors the API helper. */
-export function renderTailNotePreview(articleKeyword: string): string {
-  return `来知乎搜索🔍${articleKeyword.trim()}可以看到全文`;
+/** Renders a tail-note preview from a template, interpolating the keyword. */
+export function renderTailNotePreview(
+  articleKeyword: string,
+  template?: string,
+): string {
+  const tpl = template?.trim() || "来知乎搜索🔍{文章口令}可以看到全文";
+  return tpl.replaceAll("{文章口令}", articleKeyword.trim());
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -395,22 +404,30 @@ export const apiClient = {
   async updateKeyword(
     taskId: string,
     articleKeyword: string,
+    tailNoteTemplate?: string,
   ): Promise<ArticleTask> {
     if (useMockApi) {
       const task = mockTasks.find((candidate) => candidate.id === taskId);
       if (!task) throw new Error("任务不存在。");
       task.articleKeyword = articleKeyword;
-      task.tailNote = renderTailNotePreview(articleKeyword);
+      if (tailNoteTemplate !== undefined) {
+        task.tailNoteTemplate = tailNoteTemplate;
+      }
+      task.tailNote = renderTailNotePreview(articleKeyword, tailNoteTemplate ?? task.tailNoteTemplate);
       task.updatedAt = new Date().toISOString();
       return mockDelay({ ...task });
     }
 
-    if (window.desktop) return window.desktop.updateKeyword(taskId, articleKeyword);
+    if (window.desktop) return window.desktop.updateKeyword(taskId, articleKeyword, tailNoteTemplate);
 
+    const body: Record<string, string> = { articleKeyword };
+    if (tailNoteTemplate !== undefined) {
+      body.tailNote = tailNoteTemplate;
+    }
     return request<ArticleTask>(`/api/tasks/${taskId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ articleKeyword }),
+      body: JSON.stringify(body),
     });
   },
 

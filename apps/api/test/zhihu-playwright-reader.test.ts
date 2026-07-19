@@ -329,7 +329,7 @@ describe("readBrowserConfiguration", () => {
       executablePath: undefined,
       headless: true,
       minIntervalMs: 3_000,
-      interactiveWaitMs: 120_000,
+      interactiveWaitMs: 180_000,
     });
   });
 

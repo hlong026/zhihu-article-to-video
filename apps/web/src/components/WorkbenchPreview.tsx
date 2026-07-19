@@ -9,9 +9,11 @@ interface WorkbenchPreviewProps {
   task: ArticleTask;
   detail: ArticleTaskDetail | null;
   keyword: string;
+  tailTemplate: string;
   isSavingKeyword: boolean;
   isSavingManualContent: boolean;
   onKeywordChange: (value: string) => void;
+  onTailTemplateChange: (value: string) => void;
   onSaveKeyword: () => void;
   onSaveManualContent: (title: string, content: string) => void;
   onDownload: (asset: "video" | "images") => void;
@@ -26,9 +28,11 @@ export function WorkbenchPreview({
   task,
   detail,
   keyword,
+  tailTemplate,
   isSavingKeyword,
   isSavingManualContent,
   onKeywordChange,
+  onTailTemplateChange,
   onSaveKeyword,
   onSaveManualContent,
   onDownload,
@@ -39,9 +43,12 @@ export function WorkbenchPreview({
   const keywordLength = Array.from(trimmedKeyword).length;
   const keywordValid = keywordLength >= 2 && keywordLength <= 30;
   const keywordDirty = trimmedKeyword !== (task.articleKeyword ?? "");
-  // Dirty-data detector: the stored note disagrees with the locked format.
+  const trimmedTemplate = tailTemplate.trim();
+  const templateDirty = trimmedTemplate !== task.tailNoteTemplate;
+  const isDirty = keywordDirty || templateDirty;
+  // Dirty-data detector: the stored note disagrees with the template + keyword.
   const expectedTailNote = task.articleKeyword
-    ? renderTailNotePreview(task.articleKeyword)
+    ? renderTailNotePreview(task.articleKeyword, task.tailNoteTemplate)
     : null;
   const tailNoteMismatch =
     expectedTailNote !== null && task.tailNote !== expectedTailNote;
@@ -88,12 +95,28 @@ export function WorkbenchPreview({
         <div className="section-title-row">
           <div>
             <p className="eyebrow">最后一页</p>
-            <h3 id="keyword-editor-title">文章口令</h3>
+            <h3 id="keyword-editor-title">尾页文案</h3>
           </div>
-          <span className="character-count">{keywordLength}/30</span>
         </div>
 
+        <label className="field-label" htmlFor="tail-template-input">
+          文案模板（{"{文章口令}"} 会被替换为下方口令）
+        </label>
+        <textarea
+          id="tail-template-input"
+          className="keyword-input tail-template-input"
+          aria-label="尾页文案模板"
+          rows={2}
+          value={tailTemplate}
+          maxLength={120}
+          onChange={(event) => onTailTemplateChange(event.target.value)}
+        />
+
+        <label className="field-label" htmlFor="keyword-input">
+          文章口令<span className="character-count">{keywordLength}/30</span>
+        </label>
         <input
+          id="keyword-input"
           type="text"
           className="keyword-input"
           aria-label="文章口令"
@@ -105,8 +128,8 @@ export function WorkbenchPreview({
 
         <p className="tail-note-preview" aria-live="polite">
           {trimmedKeyword
-            ? renderTailNotePreview(trimmedKeyword)
-            : "来知乎搜索🔍{文章口令}可以看到全文"}
+            ? renderTailNotePreview(trimmedKeyword, trimmedTemplate || undefined)
+            : (trimmedTemplate || "来知乎搜索🔍{文章口令}可以看到全文")}
         </p>
 
         {!trimmedKeyword ? (
@@ -120,13 +143,13 @@ export function WorkbenchPreview({
           <div className="keyword-warning keyword-mismatch" role="alert">
             <AlertTriangle size={14} />
             <span>
-              当前尾注「{task.tailNote}」与口令不一致。
+              当前尾注「{task.tailNote}」与模板+口令不一致。
             </span>
             <button
               type="button"
               className="text-button action-emphasis"
               onClick={onSaveKeyword}
-              disabled={isSavingKeyword || !keywordDirty}
+              disabled={isSavingKeyword || !isDirty}
             >
               <Wrench size={13} />
               一键修复
@@ -135,19 +158,19 @@ export function WorkbenchPreview({
         ) : null}
 
         <p className="field-hint">
-          尾注格式已锁定，只保存口令本身；已完成任务保存后会自动重新渲染尾页与视频。
+          修改模板或口令后保存，已完成任务会自动重新渲染尾页与视频。
         </p>
         <button
           type="button"
           className="button button-dark full-width"
           onClick={onSaveKeyword}
-          disabled={isSavingKeyword || !keywordValid || !keywordDirty}
+          disabled={isSavingKeyword || !keywordValid || !isDirty}
         >
           {isSavingKeyword
             ? "正在保存…"
             : task.status === "completed"
-              ? "保存口令并重渲尾页"
-              : "保存口令"}
+              ? "保存并重渲尾页"
+              : "保存"}
         </button>
       </section>
 

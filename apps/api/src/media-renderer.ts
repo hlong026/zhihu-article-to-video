@@ -21,6 +21,10 @@ export interface RenderVideoInput {
   onImageProgress?: (done: number, total: number) => void;
   /** Fires once every card is rendered and video encoding begins. */
   onVideoEncodingStart?: () => void;
+  /** Resolved FFmpeg executable path; defaults to bare "ffmpeg" (PATH). */
+  ffmpegExecutable?: string;
+  /** Custom tail-page CTA template; {文章口令} is interpolated at render time. */
+  tailTemplate?: string;
 }
 
 export interface RenderedVideoAssets {
@@ -31,7 +35,7 @@ export interface RenderedVideoAssets {
 
 export interface MediaRendererDependencies {
   writeCards?: typeof writeSummaryPngCards;
-  executeFfmpeg?: (command: FfmpegCommand) => Promise<void>;
+  executeFfmpeg?: (command: FfmpegCommand, executableOverride?: string) => Promise<void>;
 }
 
 /**
@@ -53,6 +57,7 @@ export async function renderVideoAssets(
     input.summary,
     input.keyword,
     input.onImageProgress,
+    input.tailTemplate,
   );
   const command = buildFfmpegVideoCommand(
     cards.map(({ card }) => card),
@@ -61,7 +66,7 @@ export async function renderVideoAssets(
     input.audio,
   );
   input.onVideoEncodingStart?.();
-  await (dependencies.executeFfmpeg ?? executeFfmpeg)(command);
+  await (dependencies.executeFfmpeg ?? executeFfmpeg)(command, input.ffmpegExecutable);
 
   return {
     imagePaths: cards.map(({ outputPath }) => outputPath),
@@ -70,10 +75,13 @@ export async function renderVideoAssets(
   };
 }
 
-export async function executeFfmpeg(command: FfmpegCommand): Promise<void> {
+export async function executeFfmpeg(
+  command: FfmpegCommand,
+  executableOverride?: string,
+): Promise<void> {
   const timeoutMs = 2 * 60 * 1000;
   await new Promise<void>((resolve, reject) => {
-    const process = spawn(command.executable, command.args, {
+    const process = spawn(executableOverride ?? command.executable, command.args, {
       stdio: ["ignore", "ignore", "pipe"],
     });
     let stderr = "";

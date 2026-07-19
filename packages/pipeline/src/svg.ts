@@ -69,8 +69,9 @@ export function renderSvgCard(card: CardRenderModel): string {
 export function renderSummarySvgCards(
   summary: VideoSummary,
   keyword: string,
+  tailTemplate?: string,
 ): SvgCard[] {
-  return buildCardSequence(summary, keyword).map((card) => ({
+  return buildCardSequence(summary, keyword, tailTemplate).map((card) => ({
     card,
     filename: svgCardFilename(card),
     svg: renderSvgCard(card),
@@ -81,8 +82,9 @@ export async function writeSummarySvgCards(
   outputDirectory: string,
   summary: VideoSummary,
   keyword: string,
+  tailTemplate?: string,
 ): Promise<WrittenSvgCard[]> {
-  const cards = renderSummarySvgCards(summary, keyword);
+  const cards = renderSummarySvgCards(summary, keyword, tailTemplate);
   await mkdir(outputDirectory, { recursive: true });
 
   return Promise.all(
@@ -104,8 +106,9 @@ export async function writeSummaryPngCards(
   summary: VideoSummary,
   keyword: string,
   onCardWritten?: (done: number, total: number) => void,
+  tailTemplate?: string,
 ): Promise<WrittenPngCard[]> {
-  const cards = renderSummarySvgCards(summary, keyword);
+  const cards = renderSummarySvgCards(summary, keyword, tailTemplate);
   await mkdir(outputDirectory, { recursive: true });
 
   let done = 0;
@@ -245,9 +248,11 @@ function renderTail(card: Extract<CardRenderModel, { kind: "tail" }>): string {
   // A truncated article warns the viewer the excerpt is partial; a fully shown
   // article invites them to find more from the author instead.
   const leadLine = card.truncated ? "原文较长，以上为节选" : "全文完";
-  const cta = card.truncated
-    ? `来知乎搜索「${card.keyword}」看全文`
-    : `来知乎搜索「${card.keyword}」看更多`;
+  const cta = card.tailTemplate
+    ? card.text
+    : card.truncated
+      ? `来知乎搜索「${card.keyword}」看全文`
+      : `来知乎搜索「${card.keyword}」看更多`;
   const keywordLines = wrapText(cta, 14, 2);
   return [
     '<rect width="1080" height="1920" fill="#FFFFFF"/>',

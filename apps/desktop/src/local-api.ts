@@ -37,6 +37,7 @@ type ApiModule = {
     outputDirectory: string;
     logger: boolean;
     bundledChromiumExecutable?: string;
+    bundledFfmpegExecutable?: string;
   }): LocalFastify;
 };
 
@@ -63,7 +64,7 @@ export interface DesktopApi {
     range?: ImportRange,
   ): Promise<BatchDetail>;
   startBatch(batchId: string): Promise<BatchDetail>;
-  updateKeyword(taskId: string, articleKeyword: string): Promise<ArticleTask>;
+  updateKeyword(taskId: string, articleKeyword: string, tailNoteTemplate?: string): Promise<ArticleTask>;
   rerenderTail(taskId: string): Promise<ArticleTask>;
   saveManualContent(
     taskId: string,
@@ -111,6 +112,7 @@ export async function createDesktopApi(options: {
   appDataDirectory: string;
   apiModulePath: string;
   bundledChromiumExecutable?: string;
+  bundledFfmpegExecutable?: string;
 }): Promise<DesktopApi> {
   const apiModule = (await import(
     pathToFileURL(options.apiModulePath).href
@@ -123,6 +125,7 @@ export async function createDesktopApi(options: {
     outputDirectory: join(options.appDataDirectory, "outputs"),
     logger: false,
     bundledChromiumExecutable: options.bundledChromiumExecutable,
+    bundledFfmpegExecutable: options.bundledFfmpegExecutable,
   });
 
   return {
@@ -178,12 +181,15 @@ export async function createDesktopApi(options: {
         method: "POST",
         url: `/api/batches/${encodeURIComponent(batchId)}/start`,
       }),
-    updateKeyword: (taskId, articleKeyword) =>
+    updateKeyword: (taskId, articleKeyword, tailNoteTemplate) =>
       send<ArticleTask>(app, {
         method: "PATCH",
         url: `/api/tasks/${encodeURIComponent(taskId)}`,
         headers: { "content-type": "application/json" },
-        payload: JSON.stringify({ articleKeyword }),
+        payload: JSON.stringify({
+          articleKeyword,
+          ...(tailNoteTemplate !== undefined ? { tailNote: tailNoteTemplate } : {}),
+        }),
       }),
     rerenderTail: (taskId) =>
       send<ArticleTask>(app, {

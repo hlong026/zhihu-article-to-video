@@ -38,6 +38,8 @@ export interface TailCardRenderModel extends BaseCardRenderModel {
   keyword: string;
   /** Drives the lead copy: truncated shows "以上为节选", complete shows "全文完". */
   truncated: boolean;
+  /** Custom CTA template; when set, overrides the default truncated/complete copy. */
+  tailTemplate?: string;
 }
 
 export type CardRenderModel =
@@ -62,6 +64,7 @@ export interface CardImageRenderer {
 export function buildCardSequence(
   summary: VideoSummary,
   keyword: string,
+  tailTemplate?: string,
 ): CardRenderModel[] {
   const normalizedKeyword = keyword.trim();
   if (!normalizedKeyword) {
@@ -95,6 +98,11 @@ export function buildCardSequence(
     sourceRefs: page.sourceRefs,
     text: page.body,
   }));
+  const ctaText = tailTemplate
+    ? tailTemplate.replaceAll("{文章口令}", normalizedKeyword)
+    : summary.truncated
+      ? `来知乎搜索「${normalizedKeyword}」看全文`
+      : `来知乎搜索「${normalizedKeyword}」看更多`;
   const tail: TailCardRenderModel = {
     kind: "tail",
     canvas: cardCanvas,
@@ -102,9 +110,8 @@ export function buildCardSequence(
     totalPages,
     keyword: normalizedKeyword,
     truncated: summary.truncated,
-    text: summary.truncated
-      ? `来知乎搜索「${normalizedKeyword}」看全文`
-      : `来知乎搜索「${normalizedKeyword}」看更多`,
+    tailTemplate: tailTemplate || undefined,
+    text: ctaText,
   };
 
   return [cover, ...bodyCards, tail];

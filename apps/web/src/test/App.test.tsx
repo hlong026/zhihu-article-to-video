@@ -21,8 +21,9 @@ describe("workbench", () => {
     ).toBeVisible();
     expect(screen.getByRole("link", { name: "工作台" })).toBeVisible();
     expect(screen.getByRole("link", { name: "任务记录" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "设置" })).toBeVisible();
     expect(
-      screen.queryByText(/用户管理|设置|模板中心|算力/),
+      screen.queryByText(/用户管理|模板中心|算力|登录|套餐/),
     ).not.toBeInTheDocument();
   });
 
@@ -47,7 +48,7 @@ describe("workbench", () => {
     ).toBeVisible();
     expect(screen.getByRole("button", { name: "下载视频" })).toBeVisible();
     expect(
-      screen.getByRole("button", { name: "保存口令并重渲尾页" }),
+      screen.getByRole("button", { name: "保存并重渲尾页" }),
     ).toBeVisible();
   });
 
