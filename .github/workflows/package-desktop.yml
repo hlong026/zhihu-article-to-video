@@ -44,6 +44,20 @@ jobs:
       - name: 安装依赖
         run: pnpm install --frozen-lockfile --prod=false
 
+      - name: 将 NSIS 加入 PATH（Windows）
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $nsisDir = "C:\Program Files (x86)\NSIS"
+          if (Test-Path $nsisDir) {
+            Add-Content $env:GITHUB_PATH $nsisDir
+            Write-Host "NSIS 已加入 PATH"
+          } else {
+            Write-Host "未找到 NSIS 安装目录，尝试通过 choco 安装…"
+            choco install nsis -y --no-progress
+            Add-Content $env:GITHUB_PATH "C:\Program Files (x86)\NSIS"
+          }
+
       - name: 打包
         run: ${{ matrix.command }}
 
