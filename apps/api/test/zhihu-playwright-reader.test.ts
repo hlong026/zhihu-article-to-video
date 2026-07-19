@@ -327,6 +327,7 @@ describe("readBrowserConfiguration", () => {
       executablePath: undefined,
       headless: true,
       minIntervalMs: 3_000,
+      interactiveWaitMs: 120_000,
     });
   });
 
@@ -345,12 +346,14 @@ describe("readBrowserConfiguration", () => {
         ZHIHU_BROWSER_EXECUTABLE_PATH: "/usr/bin/chromium",
         ZHIHU_BROWSER_HEADLESS: "true",
         ZHIHU_READ_MIN_INTERVAL_MS: "5000",
+        ZHIHU_READ_INTERACTIVE_WAIT_MS: "60000",
       } as NodeJS.ProcessEnv),
     ).toEqual({
       channel: "msedge",
       executablePath: "/usr/bin/chromium",
       headless: true,
       minIntervalMs: 5_000,
+      interactiveWaitMs: 60_000,
     });
   });
 });
@@ -432,7 +435,9 @@ function createReader(
   overrides: {
     headless?: boolean;
     minIntervalMs?: number;
+    interactiveWaitMs?: number;
     onEscalate?: (reason: string) => void;
+    onInteractiveWait?: (reason: string) => void;
   } = {},
 ) {
   return new PlaywrightZhihuContentReader({
@@ -482,6 +487,9 @@ describe("PlaywrightZhihuContentReader headless-first escalation", () => {
     const escalations: string[] = [];
     const reader = createReader(fake, {
       headless: false,
+      // 可见模式命中墙会进入交互等待；预算设 0 使其立即返回，
+      // 以保留本用例“不发生 headless->visible 升级”的原意。
+      interactiveWaitMs: 0,
       onEscalate: (reason) => escalations.push(reason),
     });
 
@@ -509,6 +517,156 @@ describe("PlaywrightZhihuContentReader headless-first escalation", () => {
     expect(fake.gotoTimestamps).toHaveLength(2);
     const gap = fake.gotoTimestamps[1] - fake.gotoTimestamps[0];
     expect(gap).toBeGreaterThanOrEqual(50);
+    await reader.close();
+  });
+});
+
+/** 风控/登录墙快照：正文含受限文案，无公开正文。 */
+function restrictedSnapshot(): Omit<PageSnapshot, "url" | "httpStatus"> {
+  return {
+    title: "知乎 - 有问题，就会有答案",
+    bodyText: "您当前请求存在异常，暂时限制本次访问。",
+    contentTitle: null,
+    paragraphs: [],
+    meta: emptyPageMeta(),
+  };
+}
+
+/**
+ * 单个页面按 evaluate 调用次序返回不同快照，模拟“用户登录后页面由受限
+ * 变为可读”。waitForSelector 可配置为就绪（解析）或未就绪（拒绝）。
+ */
+function createInteractiveLauncher(script: {
+  evaluateSequence: Array<Omit<PageSnapshot, "url" | "httpStatus">>;
+  contentReady?: boolean;
+  url?: string;
+}) {
+  const launches: boolean[] = [];
+  let evaluateIndex = 0;
+  const launchPersistentContext = async (headless: boolean) => {
+    launches.push(headless);
+    const context = {
+      async newPage() {
+        return {
+          async goto() {
+            return { status: () => 200 };
+          },
+          async waitForSelector() {
+            if (script.contentReady === false) {
+              throw new Error("TimeoutError");
+            }
+            return {};
+          },
+          async evaluate() {
+            const sequence = script.evaluateSequence;
+            return sequence[Math.min(evaluateIndex++, sequence.length - 1)];
+          },
+          url: () => script.url ?? "https://zhuanlan.zhihu.com/p/123",
+          async content() {
+            return "<html></html>";
+          },
+          async close() {
+            return undefined;
+          },
+        };
+      },
+      async close() {
+        return undefined;
+      },
+    };
+    return context as unknown as BrowserContext;
+  };
+  return { launchPersistentContext, launches };
+}
+
+describe("PlaywrightZhihuContentReader interactive wait", () => {
+  const source = {
+    sourceType: "article" as const,
+    canonicalUrl: "https://zhuanlan.zhihu.com/p/123",
+  };
+
+  it("waits for the operator to pass the wall and succeeds in the same read", async () => {
+    // 前两次 evaluate 返回受限（readOnce 初始 + 等待初始），
+    // 第三次返回可读（用户完成登录后轮询重提取）。
+    const fake = createInteractiveLauncher({
+      evaluateSequence: [
+        restrictedSnapshot(),
+        restrictedSnapshot(),
+        readablePage().snapshot,
+      ],
+      contentReady: true,
+    });
+    const waits: string[] = [];
+    const reader = new PlaywrightZhihuContentReader({
+      sessionDirectory: "/tmp/zhihu-reader-test",
+      minIntervalMs: 0,
+      headless: false,
+      launchPersistentContext: fake.launchPersistentContext,
+      onInteractiveWait: (reason) => waits.push(reason),
+    });
+
+    const result = await reader.read(source);
+
+    expect(result.ok).toBe(true);
+    expect(waits).toHaveLength(1);
+    // 可见模式直接启动，不应有 headless->visible 升级。
+    expect(fake.launches).toEqual([false]);
+    await reader.close();
+  });
+
+  it("returns restricted without hanging when the wait budget is exhausted", async () => {
+    const fake = createInteractiveLauncher({
+      evaluateSequence: [restrictedSnapshot()],
+      contentReady: false,
+    });
+    const waits: string[] = [];
+    const reader = new PlaywrightZhihuContentReader({
+      sessionDirectory: "/tmp/zhihu-reader-test",
+      minIntervalMs: 0,
+      headless: false,
+      interactiveWaitMs: 0,
+      launchPersistentContext: fake.launchPersistentContext,
+      onInteractiveWait: (reason) => waits.push(reason),
+    });
+
+    const result = await reader.read(source);
+
+    expect(result).toMatchObject({
+      ok: false,
+      failure: { code: "SOURCE_ACCESS_RESTRICTED" },
+    });
+    // 进入等待即应提示用户，即使预算为 0 也会触发一次回调。
+    expect(waits).toHaveLength(1);
+    await reader.close();
+  });
+
+  it("does not interactively wait while still in headless mode", async () => {
+    // headless 命中墙后走升级路径；交互等待只在升级后的可见读取中生效。
+    // 这里两页都受限，升级后的可见读取也会进入等待，但预算为 0 立即返回。
+    const fake = createInteractiveLauncher({
+      evaluateSequence: [restrictedSnapshot()],
+      contentReady: false,
+    });
+    const waits: string[] = [];
+    const reader = new PlaywrightZhihuContentReader({
+      sessionDirectory: "/tmp/zhihu-reader-test",
+      minIntervalMs: 0,
+      headless: true,
+      interactiveWaitMs: 0,
+      launchPersistentContext: fake.launchPersistentContext,
+      onInteractiveWait: (reason) => waits.push(reason),
+    });
+
+    const result = await reader.read(source);
+
+    expect(result).toMatchObject({
+      ok: false,
+      failure: { code: "SOURCE_ACCESS_RESTRICTED" },
+    });
+    // 先 headless 后升级可见：两次启动。
+    expect(fake.launches).toEqual([true, false]);
+    // 交互等待回调只在升级后的可见读取中触发一次。
+    expect(waits).toHaveLength(1);
     await reader.close();
   });
 });

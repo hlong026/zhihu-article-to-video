@@ -11,6 +11,7 @@ import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 import { BatchDetailPage } from "./pages/BatchDetailPage";
 import { TaskHistoryPage } from "./pages/TaskHistoryPage";
 import { WorkbenchPage } from "./pages/WorkbenchPage";
+import { ToastProvider } from "./components/Toast";
 import "./styles/app.css";
 
 const navigation = [
@@ -44,13 +45,33 @@ export function App() {
   }
 
   return (
-    <div className={`app-shell${collapsed ? " sidebar-collapsed" : ""}`}>
-      <aside className="sidebar">
-        <div className="brand">
-          <span className="brand-mark">
-            <Clapperboard size={22} />
-          </span>
-          <span className="brand-text">知乎文章转视频</span>
+    <ToastProvider>
+      <div className={`app-shell${collapsed ? " sidebar-collapsed" : ""}`}>
+        <aside className="sidebar">
+          <div className="brand">
+            <span className="brand-mark">
+              <Clapperboard size={22} />
+            </span>
+            <span className="brand-text">知乎文章转视频</span>
+          </div>
+          <nav aria-label="主导航">
+            {navigation.map(({ to, label, icon: Icon }) => (
+              <NavLink
+                key={to}
+                to={to}
+                title={label}
+                aria-label={label}
+                className={({ isActive }) =>
+                  `nav-link${isActive ? " active" : ""}`
+                }
+              >
+                <Icon size={18} />
+                <span className="nav-label">{label}</span>
+              </NavLink>
+            ))}
+          </nav>
+          <p className="sidebar-caption">一篇文章，生成一条可审核的图文视频。</p>
+          {/* Collapse toggle at the bottom of sidebar */}
           <button
             type="button"
             className="sidebar-toggle"
@@ -64,34 +85,20 @@ export function App() {
             ) : (
               <PanelLeftClose size={17} />
             )}
+            <span className="nav-label toggle-label">
+              {collapsed ? "展开" : "收起"}
+            </span>
           </button>
-        </div>
-        <nav aria-label="主导航">
-          {navigation.map(({ to, label, icon: Icon }) => (
-            <NavLink
-              key={to}
-              to={to}
-              title={label}
-              aria-label={label}
-              className={({ isActive }) =>
-                `nav-link${isActive ? " active" : ""}`
-              }
-            >
-              <Icon size={18} />
-              <span className="nav-label">{label}</span>
-            </NavLink>
-          ))}
-        </nav>
-        <p className="sidebar-caption">一篇文章，生成一条可审核的图文视频。</p>
-      </aside>
-      <main className="main-content">
-        <Routes>
-          <Route path="/workbench" element={<WorkbenchPage />} />
-          <Route path="/history" element={<TaskHistoryPage />} />
-          <Route path="/history/:batchId" element={<BatchDetailPage />} />
-          <Route path="*" element={<Navigate to="/workbench" replace />} />
-        </Routes>
-      </main>
-    </div>
+        </aside>
+        <main className="main-content">
+          <Routes>
+            <Route path="/workbench" element={<WorkbenchPage />} />
+            <Route path="/history" element={<TaskHistoryPage />} />
+            <Route path="/history/:batchId" element={<BatchDetailPage />} />
+            <Route path="*" element={<Navigate to="/workbench" replace />} />
+          </Routes>
+        </main>
+      </div>
+    </ToastProvider>
   );
 }

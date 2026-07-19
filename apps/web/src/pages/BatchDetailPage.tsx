@@ -1,4 +1,4 @@
-import { ArrowLeft, Download, FileSpreadsheet, Sparkles } from "lucide-react";
+import { ArrowLeft, Download, FileSpreadsheet } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import type {
@@ -8,9 +8,11 @@ import type {
 } from "@zhihu-video/contracts";
 
 import { apiClient, isTerminalTaskStatus } from "../api/client";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { StatusBadge } from "../components/StatusBadge";
 import { AttemptTimeline, TaskPreviewMedia } from "../components/TaskPreviewMedia";
 import { TaskTable } from "../components/TaskTable";
+import { useToast } from "../components/Toast";
 
 const POLL_INTERVAL_MS = 2_000;
 
@@ -31,15 +33,25 @@ function StatCard({ label, value }: { label: string; value: number }) {
   );
 }
 
+interface DeleteConfirmState {
+  type: "single" | "batch";
+  taskIds: string[];
+  title: string;
+}
+
 export function BatchDetailPage() {
+  const { toast } = useToast();
   const { batchId } = useParams<{ batchId: string }>();
   const [detail, setDetail] = useState<BatchDetailView | null>(null);
   const [selectedTask, setSelectedTask] = useState<ArticleTask | null>(null);
   const [selectedDetail, setSelectedDetail] = useState<ArticleTaskDetail | null>(
     null,
   );
-  const [notice, setNotice] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<DeleteConfirmState | null>(
+    null,
+  );
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const refresh = useCallback(async () => {
     if (!batchId) return;
@@ -62,7 +74,6 @@ export function BatchDetailPage() {
     );
   }, [refresh]);
 
-  // Keep watching while the batch still has work in flight.
   const hasActiveTasks =
     detail?.tasks.some((task) => !isTerminalTaskStatus(task.status)) ?? false;
   useEffect(() => {
@@ -98,9 +109,9 @@ export function BatchDetailPage() {
     try {
       await apiClient.retryTask(task.id);
       await refresh();
-      setNotice("任务已加入处理队列。");
+      toast("任务已加入处理队列。", "success");
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "任务重试失败。");
+      toast(error instanceof Error ? error.message : "任务重试失败。", "error");
     }
   }
 
@@ -111,10 +122,14 @@ export function BatchDetailPage() {
           asset === "video"
             ? await window.desktop.downloadVideo(task.id)
             : await window.desktop.downloadImages(task.id);
-        setNotice(savedPath ? `已保存到：${savedPath}` : "已取消保存。");
+        toast(
+          savedPath ? `已保存到：${savedPath}` : "已取消保存。",
+          savedPath ? "success" : "info",
+        );
       } catch (error) {
-        setNotice(
+        toast(
           error instanceof Error ? error.message : "下载失败，请稍后再试。",
+          "error",
         );
       }
       return;
@@ -134,10 +149,14 @@ export function BatchDetailPage() {
           asset === "batch"
             ? await window.desktop.downloadBatch(batchId)
             : await window.desktop.downloadResultWorkbook(batchId);
-        setNotice(savedPath ? `已保存到：${savedPath}` : "已取消保存。");
+        toast(
+          savedPath ? `已保存到：${savedPath}` : "已取消保存。",
+          savedPath ? "success" : "info",
+        );
       } catch (error) {
-        setNotice(
+        toast(
           error instanceof Error ? error.message : "下载失败，请稍后再试。",
+          "error",
         );
       }
       return;
@@ -147,6 +166,39 @@ export function BatchDetailPage() {
         ? apiClient.getBatchDownloadUrl(batchId)
         : apiClient.getResultWorkbookUrl(batchId);
     window.open(url, "_blank", "noopener,noreferrer");
+  }
+
+  function requestDeleteTask(task: ArticleTask) {
+    const title = task.fetchedTitle ?? task.inputTitle ?? "未命名文章";
+    setDeleteConfirm({ type: "single", taskIds: [task.id], title });
+  }
+
+  function requestBatchDelete(taskIds: string[]) {
+    setDeleteConfirm({
+      type: "batch",
+      taskIds,
+      title: `${taskIds.length} 个任务`,
+    });
+  }
+
+  async function confirmDelete() {
+    if (!deleteConfirm) return;
+    setIsDeleting(true);
+    try {
+      if (deleteConfirm.type === "single") {
+        await apiClient.deleteTask(deleteConfirm.taskIds[0]);
+        toast("任务已删除。", "success");
+      } else {
+        const result = await apiClient.batchDeleteTasks(deleteConfirm.taskIds);
+        toast(`已删除 ${result.deletedCount} 个任务。`, "success");
+      }
+      await refresh();
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "删除失败。", "error");
+    } finally {
+      setIsDeleting(false);
+      setDeleteConfirm(null);
+    }
   }
 
   if (loadError) {
@@ -196,20 +248,6 @@ export function BatchDetailPage() {
           </button>
         </div>
       </header>
-
-      {notice ? (
-        <div className="notice" role="status">
-          <Sparkles size={16} />
-          {notice}
-          <button
-            type="button"
-            onClick={() => setNotice(null)}
-            aria-label="关闭提示"
-          >
-            ×
-          </button>
-        </div>
-      ) : null}
 
       <section className="batch-summary" aria-label="批次统计">
         <div className="batch-file">
@@ -273,6 +311,8 @@ export function BatchDetailPage() {
           onSelect={setSelectedTask}
           onRetry={(task) => void handleRetry(task)}
           onDownload={(task, asset) => void handleDownload(task, asset)}
+          onDelete={requestDeleteTask}
+          onBatchDelete={requestBatchDelete}
         />
         {selectedTask ? (
           <aside className="preview-panel" aria-label="任务详情">
@@ -323,6 +363,18 @@ export function BatchDetailPage() {
           </aside>
         ) : null}
       </div>
+
+      {deleteConfirm ? (
+        <ConfirmDialog
+          title="确认删除"
+          description={`确定要删除「${deleteConfirm.title}」吗？删除后产物文件也会被清理，此操作不可撤销。`}
+          confirmLabel="删除"
+          danger
+          isLoading={isDeleting}
+          onConfirm={() => void confirmDelete()}
+          onCancel={() => setDeleteConfirm(null)}
+        />
+      ) : null}
     </div>
   );
 }

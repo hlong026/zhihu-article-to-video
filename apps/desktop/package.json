@@ -10,6 +10,7 @@
   "scripts": {
     "dev": "pnpm run build && electron .",
     "build": "tsc -p tsconfig.json",
+    "build:icons": "node scripts/build-icons.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "prepare-runtime": "node scripts/install-runtime.mjs",
     "rebuild-native": "electron-rebuild --force --only better-sqlite3,sharp --module-dir ../api",
@@ -20,6 +21,8 @@
   "devDependencies": {
     "@electron/rebuild": "^4.2.0",
     "electron": "latest",
+    "png2icons": "^2.0.1",
+    "rcedit": "^5.0.2",
     "tsx": "latest",
     "typescript": "^5.7.3"
   }

@@ -2,7 +2,6 @@ import {
   FileSpreadsheet,
   Import,
   Play,
-  Sparkles,
   Upload,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -17,9 +16,11 @@ import {
   type WorkbenchData,
 } from "../api/client";
 import { BgmSettingsCard } from "../components/BgmSettingsCard";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { ImportRangeDialog } from "../components/ImportRangeDialog";
 import { ProcessingSettingsCard } from "../components/ProcessingSettingsCard";
 import { TaskTable } from "../components/TaskTable";
+import { useToast } from "../components/Toast";
 import { WorkbenchPreview } from "../components/WorkbenchPreview";
 
 const POLL_INTERVAL_MS = 2_000;
@@ -46,7 +47,14 @@ function MetricCard({
   );
 }
 
+interface DeleteConfirmState {
+  type: "single" | "batch";
+  taskIds: string[];
+  title: string;
+}
+
 export function WorkbenchPage() {
+  const { toast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [workbench, setWorkbench] = useState<WorkbenchData | null>(null);
   const [selectedTask, setSelectedTask] = useState<ArticleTask | null>(null);
@@ -54,8 +62,6 @@ export function WorkbenchPage() {
     null,
   );
   const [keyword, setKeyword] = useState("");
-  // Tracks which task the keyword input is currently editing so background
-  // polling refreshes never clobber an in-progress edit.
   const keywordTaskIdRef = useRef<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isPreparingImport, setIsPreparingImport] = useState(false);
@@ -65,7 +71,10 @@ export function WorkbenchPage() {
   const [isImporting, setIsImporting] = useState(false);
   const [isSavingKeyword, setIsSavingKeyword] = useState(false);
   const [isSavingManualContent, setIsSavingManualContent] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<DeleteConfirmState | null>(
+    null,
+  );
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const syncKeyword = useCallback((task: ArticleTask | null) => {
     if (task && keywordTaskIdRef.current !== task.id) {
@@ -94,12 +103,14 @@ export function WorkbenchPage() {
   useEffect(() => {
     refresh()
       .catch((error: unknown) =>
-        setNotice(error instanceof Error ? error.message : "读取任务失败。"),
+        toast(
+          error instanceof Error ? error.message : "读取任务失败。",
+          "error",
+        ),
       )
       .finally(() => setIsLoading(false));
-  }, [refresh]);
+  }, [refresh, toast]);
 
-  // Poll while any task is still moving; stop once everything is terminal.
   const hasActiveTasks =
     workbench?.tasks.some((task) => !isTerminalTaskStatus(task.status)) ??
     false;
@@ -111,7 +122,6 @@ export function WorkbenchPage() {
     return () => window.clearInterval(timer);
   }, [hasActiveTasks, refresh]);
 
-  // Load the detail (artifacts + attempt log) for the selected task.
   const selectedTaskId = selectedTask?.id ?? null;
   const selectedTaskUpdatedAt = selectedTask?.updatedAt ?? null;
   useEffect(() => {
@@ -160,10 +170,11 @@ export function WorkbenchPage() {
       const prepared = await apiClient.prepareImport(file);
       if (prepared) setPreparedImport(prepared);
     } catch (error) {
-      setNotice(
+      toast(
         error instanceof Error
           ? error.message
           : "Excel 解析失败，请检查文件格式。",
+        "error",
       );
     } finally {
       setIsPreparingImport(false);
@@ -187,14 +198,16 @@ export function WorkbenchPage() {
       await apiClient.startBatch(result.batchId);
       await refresh();
       setPreparedImport(null);
-      setNotice(
+      toast(
         `已导入 ${result.createdCount} 条文章任务，批次已开始处理。`,
+        "success",
       );
     } catch (error) {
-      setNotice(
+      toast(
         error instanceof Error
           ? error.message
           : "导入失败，请检查 Excel 格式。",
+        "error",
       );
     } finally {
       setIsImporting(false);
@@ -205,7 +218,7 @@ export function WorkbenchPage() {
     if (!selectedTask) return;
     const nextKeyword = keyword.trim();
     if (nextKeyword.length < 2) {
-      setNotice("口令至少需要 2 个字符。");
+      toast("口令至少需要 2 个字符。", "error");
       return;
     }
 
@@ -225,19 +238,20 @@ export function WorkbenchPage() {
         try {
           const rerendered = await apiClient.rerenderTail(updatedTask.id);
           replaceTask(rerendered);
-          setNotice("口令已保存，尾页与视频已按新口令重新渲染。");
+          toast("口令已保存，尾页与视频已按新口令重新渲染。", "success");
         } catch (error) {
-          setNotice(
+          toast(
             `口令已保存，但尾页重渲失败（${
               error instanceof Error ? error.message : "未知错误"
             }），可稍后重试。`,
+            "error",
           );
         }
       } else {
-        setNotice("口令已保存，任务生成尾页时将使用新口令。");
+        toast("口令已保存，任务生成尾页时将使用新口令。", "success");
       }
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "口令保存失败。");
+      toast(error instanceof Error ? error.message : "口令保存失败。", "error");
     } finally {
       setIsSavingKeyword(false);
     }
@@ -248,9 +262,9 @@ export function WorkbenchPage() {
       const updatedTask = await apiClient.retryTask(task.id);
       replaceTask(updatedTask);
       syncKeyword(updatedTask);
-      setNotice("任务已加入处理队列。");
+      toast("任务已加入处理队列。", "success");
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "任务重试失败。");
+      toast(error instanceof Error ? error.message : "任务重试失败。", "error");
     }
   }
 
@@ -267,10 +281,11 @@ export function WorkbenchPage() {
       replaceTask(savedTask);
       const retriedTask = await apiClient.retryTask(savedTask.id);
       replaceTask(retriedTask);
-      setNotice("正文已保存，任务已跳过读取步骤重新处理。");
+      toast("正文已保存，任务已跳过读取步骤重新处理。", "success");
     } catch (error) {
-      setNotice(
+      toast(
         error instanceof Error ? error.message : "正文保存失败，请重试。",
+        "error",
       );
     } finally {
       setIsSavingManualContent(false);
@@ -278,18 +293,20 @@ export function WorkbenchPage() {
   }
 
   async function handleDownload(task: ArticleTask, asset: "video" | "images") {
-    // The desktop shell blocks window.open, so downloads go through the
-    // preload bridge and a native save dialog instead.
     if (window.desktop) {
       try {
         const savedPath =
           asset === "video"
             ? await window.desktop.downloadVideo(task.id)
             : await window.desktop.downloadImages(task.id);
-        setNotice(savedPath ? `已保存到：${savedPath}` : "已取消保存。");
+        toast(
+          savedPath ? `已保存到：${savedPath}` : "已取消保存。",
+          savedPath ? "success" : "info",
+        );
       } catch (error) {
-        setNotice(
+        toast(
           error instanceof Error ? error.message : "下载失败，请稍后再试。",
+          "error",
         );
       }
       return;
@@ -299,6 +316,52 @@ export function WorkbenchPage() {
       "_blank",
       "noopener,noreferrer",
     );
+  }
+
+  function requestDeleteTask(task: ArticleTask) {
+    const title = task.fetchedTitle ?? task.inputTitle ?? "未命名文章";
+    setDeleteConfirm({ type: "single", taskIds: [task.id], title });
+  }
+
+  function requestBatchDelete(taskIds: string[]) {
+    setDeleteConfirm({
+      type: "batch",
+      taskIds,
+      title: `${taskIds.length} 个任务`,
+    });
+  }
+
+  async function confirmDelete() {
+    if (!deleteConfirm) return;
+    setIsDeleting(true);
+    try {
+      if (deleteConfirm.type === "single") {
+        await apiClient.deleteTask(deleteConfirm.taskIds[0]);
+        toast("任务已删除。", "success");
+      } else {
+        const result = await apiClient.batchDeleteTasks(deleteConfirm.taskIds);
+        toast(`已删除 ${result.deletedCount} 个任务。`, "success");
+      }
+      // Remove from local state
+      const deletedSet = new Set(deleteConfirm.taskIds);
+      setWorkbench((current) =>
+        current
+          ? {
+              ...current,
+              tasks: current.tasks.filter((t) => !deletedSet.has(t.id)),
+            }
+          : current,
+      );
+      if (selectedTask && deletedSet.has(selectedTask.id)) {
+        setSelectedTask(null);
+        setSelectedDetail(null);
+      }
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "删除失败。", "error");
+    } finally {
+      setIsDeleting(false);
+      setDeleteConfirm(null);
+    }
   }
 
   if (isLoading) {
@@ -346,22 +409,8 @@ export function WorkbenchPage() {
         </div>
       </header>
 
-      {notice ? (
-        <div className="notice" role="status">
-          <Sparkles size={16} />
-          {notice}
-          <button
-            type="button"
-            onClick={() => setNotice(null)}
-            aria-label="关闭提示"
-          >
-            ×
-          </button>
-        </div>
-      ) : null}
-
-      <BgmSettingsCard onNotice={setNotice} />
-      <ProcessingSettingsCard onNotice={setNotice} />
+      <BgmSettingsCard onNotice={(msg) => toast(msg, "info")} />
+      <ProcessingSettingsCard onNotice={(msg) => toast(msg, "info")} />
 
       {workbench && selectedTask ? (
         <>
@@ -427,6 +476,8 @@ export function WorkbenchPage() {
               onSelect={selectTask}
               onRetry={(task) => void handleRetry(task)}
               onDownload={(task, asset) => void handleDownload(task, asset)}
+              onDelete={requestDeleteTask}
+              onBatchDelete={requestBatchDelete}
             />
             <WorkbenchPreview
               task={selectedTask}
@@ -481,6 +532,18 @@ export function WorkbenchPage() {
           isImporting={isImporting}
           onConfirm={(range) => void handleConfirmImport(range)}
           onCancel={() => setPreparedImport(null)}
+        />
+      ) : null}
+
+      {deleteConfirm ? (
+        <ConfirmDialog
+          title="确认删除"
+          description={`确定要删除「${deleteConfirm.title}」吗？删除后产物文件也会被清理，此操作不可撤销。`}
+          confirmLabel="删除"
+          danger
+          isLoading={isDeleting}
+          onConfirm={() => void confirmDelete()}
+          onCancel={() => setDeleteConfirm(null)}
         />
       ) : null}
     </div>

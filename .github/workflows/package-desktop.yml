@@ -20,13 +20,13 @@ jobs:
             runner: macos-latest
             command: pnpm desktop:make
             artifact_name: zhihu-article-to-video-macos
-            artifact_path: apps/desktop/out/darwin/ZhihuArticleToVideo-macos-arm64.zip
+            artifact_path: apps/desktop/out/darwin/ZhihuArticleToVideo-macos-arm64.dmg
           - name: Windows
             platform: windows
             runner: windows-latest
             command: pnpm desktop:make:win32
             artifact_name: zhihu-article-to-video-windows
-            artifact_path: apps/desktop/out/win32/ZhihuArticleToVideo-win32-x64.zip
+            artifact_path: apps/desktop/out/win32/ZhihuArticleToVideo-win32-x64-Setup.exe
 
     steps:
       - name: 检出代码
@@ -46,13 +46,6 @@ jobs:
 
       - name: 打包
         run: ${{ matrix.command }}
-
-      - name: 压缩 macOS 应用
-        if: matrix.platform == 'macos'
-        run: >-
-          ditto -c -k --keepParent
-          apps/desktop/out/darwin/ZhihuArticleToVideo.app
-          ${{ matrix.artifact_path }}
 
       - name: 上传安装包
         uses: actions/upload-artifact@v4
@@ -85,7 +78,12 @@ jobs:
         run: |
           version=$(node -p "require('./apps/desktop/package.json').version")
           tag="v${version}-build.${GITHUB_RUN_NUMBER}"
+          {
+            echo "> 未签名内部测试包：尚未进行代码签名与公证。"
+            echo "> Windows 安装时会触发 SmartScreen、macOS 会触发 Gatekeeper 拦截，需手动放行后方可运行。"
+          } > release-notes.md
           gh release create "$tag" release/* \
             --target "$GITHUB_SHA" \
             --title "$tag" \
+            --notes-file release-notes.md \
             --generate-notes

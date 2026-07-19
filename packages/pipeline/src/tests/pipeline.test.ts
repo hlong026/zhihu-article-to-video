@@ -7,6 +7,7 @@ import {
   countBodyCharacters,
   totalVideoDuration,
   escapeSvgText,
+  measureBodyLayout,
   paginateParagraphs,
   parseTitleAndTags,
   renderSummarySvgCards,
@@ -325,6 +326,59 @@ export async function runPipelineTests(): Promise<void> {
     countBodyCharacters("abc def\nghi"),
     9,
     "whitespace should not count toward the body length",
+  );
+
+  const measured = measureBodyLayout("abcd\nefgh");
+  equal(measured.lineCount, 2, "measureBodyLayout should count lines");
+  equal(
+    measured.maxLineUnits,
+    4,
+    "ASCII lines should count one layout unit per character",
+  );
+  equal(
+    measureBodyLayout("一二三").maxLineUnits,
+    6,
+    "wide glyphs should count two layout units each",
+  );
+
+  // ASCII 密集内容每行可排 36 个窄字符，单页非空白字符数会远超 324，
+  // 但行数仍 ≤18，排版完全放得下——校验不应误报 CARD_BODY_TOO_LONG。
+  const asciiHeavy = paginateParagraphs([
+    "In this section we explain how the LLM training recipe combines tokenizer, optimizer and scheduler. "
+      .repeat(6)
+      .trim(),
+  ]);
+  const asciiSummary = validateVideoSummary(
+    {
+      ...validSummary,
+      pages: asciiHeavy.pages,
+      truncated: asciiHeavy.truncated,
+    },
+    { hasVerifiedKeyword: true },
+  );
+  equal(
+    asciiSummary.issues.some((issue) => issue.code === "CARD_BODY_TOO_LONG"),
+    false,
+    "ASCII-heavy pages that fit the layout must not be flagged as too long",
+  );
+
+  // 真正超高（行数超过 linesPerPage）的页面仍应被拦截。
+  const tooTall = validateVideoSummary(
+    {
+      ...validSummary,
+      pages: [
+        {
+          body: Array.from({ length: 19 }, () => "abc").join("\n"),
+          sourceRefs: [1],
+        },
+      ],
+    },
+    { hasVerifiedKeyword: true },
+  );
+  equal(
+    tooTall.issues.some((issue) => issue.code === "CARD_BODY_TOO_LONG"),
+    true,
+    "a page taller than the layout line budget should be flagged",
   );
 
   const badReference = validateVideoSummary(

@@ -108,6 +108,28 @@ export function countBodyCharacters(body: string): number {
 const wideCharacter =
   /[\u1100-\u115F\u2E80-\uA4CF\uAC00-\uD7A3\uF900-\uFAFF\uFE30-\uFE4F\uFF00-\uFF60\uFFE0-\uFFE6\u3000-\u303F\u4E00-\u9FFF]/;
 
+/**
+ * 测量已排版正文的布局占用，与分页器/渲染器使用同一宽度模型
+ * （宽字符=2 单位，ASCII=1 单位）。校验据此判断单页是否超出排版容量：
+ * 行数超过 linesPerPage 即为超高。纯字符数会误报 ASCII 密集内容
+ * （每格可排两个窄字符），故不用字符数衡量上限。
+ */
+export function measureBodyLayout(body: string): {
+  lineCount: number;
+  maxLineUnits: number;
+} {
+  const lines = body.split("\n");
+  let maxLineUnits = 0;
+  for (const line of lines) {
+    let units = 0;
+    for (const character of Array.from(line)) {
+      units += wideCharacter.test(character) ? 2 : 1;
+    }
+    if (units > maxLineUnits) maxLineUnits = units;
+  }
+  return { lineCount: lines.length, maxLineUnits };
+}
+
 type WrapUnit = { text: string; width: number; space: boolean };
 
 function toWrapUnits(text: string): WrapUnit[] {

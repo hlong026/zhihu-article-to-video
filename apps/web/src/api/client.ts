@@ -615,6 +615,53 @@ export const apiClient = {
   getResultWorkbookUrl(batchId: string): string {
     return `${apiBaseUrl}/api/batches/${batchId}/result.xlsx`;
   },
+
+  async deleteTask(taskId: string): Promise<void> {
+    if (useMockApi) {
+      const index = mockTasks.findIndex((t) => t.id === taskId);
+      if (index !== -1) mockTasks.splice(index, 1);
+      return mockDelay(undefined);
+    }
+    if (window.desktop) {
+      await window.desktop.deleteTask(taskId);
+      return;
+    }
+    await request<{ ok: boolean }>(`/api/tasks/${taskId}`, {
+      method: "DELETE",
+    });
+  },
+
+  async batchDeleteTasks(taskIds: string[]): Promise<{ deletedCount: number }> {
+    if (useMockApi) {
+      const idSet = new Set(taskIds);
+      for (let i = mockTasks.length - 1; i >= 0; i--) {
+        if (idSet.has(mockTasks[i].id)) mockTasks.splice(i, 1);
+      }
+      return mockDelay({ deletedCount: taskIds.length });
+    }
+    if (window.desktop) {
+      return window.desktop.batchDeleteTasks(taskIds);
+    }
+    return request<{ ok: boolean; deletedCount: number }>(
+      "/api/tasks/batch-delete",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ taskIds }),
+      },
+    );
+  },
+
+  async deleteBatch(batchId: string): Promise<void> {
+    if (useMockApi) return mockDelay(undefined);
+    if (window.desktop) {
+      await window.desktop.deleteBatch(batchId);
+      return;
+    }
+    await request<{ ok: boolean }>(`/api/batches/${batchId}`, {
+      method: "DELETE",
+    });
+  },
 };
 
 export function isTerminalTaskStatus(status: TaskStatus): boolean {

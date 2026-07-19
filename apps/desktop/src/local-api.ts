@@ -69,6 +69,9 @@ export interface DesktopApi {
     input: { title: string; content: string },
   ): Promise<ArticleTask>;
   retryTask(taskId: string): Promise<ArticleTask>;
+  deleteTask(taskId: string): Promise<{ ok: boolean }>;
+  batchDeleteTasks(taskIds: string[]): Promise<{ ok: boolean; deletedCount: number }>;
+  deleteBatch(batchId: string): Promise<{ ok: boolean }>;
   taskPreviewImage(taskId: string): Promise<BgmPreviewAsset>;
   downloadVideo(taskId: string): Promise<DownloadedAsset>;
   downloadImages(taskId: string): Promise<DownloadedAsset>;
@@ -194,6 +197,23 @@ export async function createDesktopApi(options: {
       send<ArticleTask>(app, {
         method: "POST",
         url: `/api/tasks/${encodeURIComponent(taskId)}/retry`,
+      }),
+    deleteTask: (taskId) =>
+      send<{ ok: boolean }>(app, {
+        method: "DELETE",
+        url: `/api/tasks/${encodeURIComponent(taskId)}`,
+      }),
+    batchDeleteTasks: (taskIds) =>
+      send<{ ok: boolean; deletedCount: number }>(app, {
+        method: "POST",
+        url: "/api/tasks/batch-delete",
+        headers: { "content-type": "application/json" },
+        payload: JSON.stringify({ taskIds }),
+      }),
+    deleteBatch: (batchId) =>
+      send<{ ok: boolean }>(app, {
+        method: "DELETE",
+        url: `/api/batches/${encodeURIComponent(batchId)}`,
       }),
     taskPreviewImage: (taskId) =>
       streamAsset(app, `/api/tasks/${encodeURIComponent(taskId)}/preview-image`),

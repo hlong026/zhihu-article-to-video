@@ -42,6 +42,13 @@ export interface PlaywrightReaderOptions {
   navigationTimeoutMs?: number;
   /** Called once whenever the reader escalates from headless to a visible window. */
   onEscalate?: (reason: string) => void;
+  /**
+   * Maximum time (ms) to keep waiting for the operator to complete login or
+   * verification in a visible window before giving up. Defaults to 120_000.
+   */
+  interactiveWaitMs?: number;
+  /** Called when the reader starts waiting for operator login/verification. */
+  onInteractiveWait?: (reason: string) => void;
   /** Test hook: replaces the Playwright launcher. Receives the headless flag. */
   launchPersistentContext?: (headless: boolean) => Promise<BrowserContext>;
 }
@@ -387,10 +394,12 @@ export class PlaywrightZhihuContentReader implements ZhihuContentReader {
   private headlessActive: boolean;
   private readonly minIntervalMs: number;
   private readonly navigationTimeoutMs: number;
+  private readonly interactiveWaitMs: number;
 
   constructor(private readonly options: PlaywrightReaderOptions) {
     this.minIntervalMs = Math.max(0, options.minIntervalMs ?? 3_000);
     this.navigationTimeoutMs = options.navigationTimeoutMs ?? 30_000;
+    this.interactiveWaitMs = Math.max(0, options.interactiveWaitMs ?? 120_000);
     this.headlessActive = options.headless ?? true;
   }
 
@@ -473,12 +482,27 @@ export class PlaywrightZhihuContentReader implements ZhihuContentReader {
         ),
       ]);
 
-      const snapshot = await page.evaluate(extractInPage, selectors);
-      const result = interpretPageSnapshot({
+      const httpStatus = response?.status() ?? 0;
+      let snapshot = await page.evaluate(extractInPage, selectors);
+      let result = interpretPageSnapshot({
         ...snapshot,
         url: page.url(),
-        httpStatus: response?.status() ?? 0,
+        httpStatus,
       });
+
+      // 可见模式下命中登录/验证/风控墙：停在当前页等待用户完成操作，
+      // 而非立即失败，避免“刚弹窗就翻页”导致无法扫码/拖滑块。
+      if (
+        !result.ok &&
+        result.failure.code === "SOURCE_ACCESS_RESTRICTED" &&
+        !this.headlessActive
+      ) {
+        ({ result, snapshot } = await this.waitForInteractiveAccess(
+          page,
+          selectors,
+          httpStatus,
+        ));
+      }
 
       if (result.ok && result.content.meta && snapshot.meta.avatarUrl) {
         const avatarDataUri = await this.downloadAvatar(
@@ -508,6 +532,68 @@ export class PlaywrightZhihuContentReader implements ZhihuContentReader {
     } finally {
       await page.close().catch(() => undefined);
     }
+  }
+
+  /**
+   * 可见模式下命中登录/验证/风控墙时，停在当前页轮询等待用户完成操作，
+   * 直到正文出现或超过 interactiveWaitMs。返回刷新后的结果与快照，
+   * 使当次任务在用户登录后即可成功，无需手动重试。
+   */
+  private async waitForInteractiveAccess(
+    page: Page,
+    selectors: SelectorConfig,
+    httpStatus: number,
+  ): Promise<{
+    result: SourceReadResult;
+    snapshot: Omit<PageSnapshot, "url" | "httpStatus">;
+  }> {
+    this.options.onInteractiveWait?.(
+      "检测到知乎登录/验证墙，请在浏览器窗口中完成登录或验证，正在等待…",
+    );
+    const pollIntervalMs = 1_500;
+    const deadline = Date.now() + this.interactiveWaitMs;
+    let snapshot = await page.evaluate(extractInPage, selectors);
+    let result = interpretPageSnapshot({
+      ...snapshot,
+      url: page.url(),
+      httpStatus,
+    });
+
+    // 以 waitForSelector 的超时作为轮询节拍：正文未就绪时它自然等待一个
+    // 周期；一旦正文出现且离开登录页，立即重新提取。用户完成登录/验证后
+    // 当次任务即可成功，无需手动重试。
+    while (
+      !result.ok &&
+      result.failure.code === "SOURCE_ACCESS_RESTRICTED" &&
+      Date.now() < deadline
+    ) {
+      const contentReady = await page
+        .waitForSelector(CONTENT_WAIT_SELECTOR, { timeout: pollIntervalMs })
+        .then(() => true)
+        .catch(() => false);
+      if (!contentReady || page.url().includes("/signin")) {
+        continue; // waitForSelector 已等待一个周期。
+      }
+
+      await Promise.all(
+        (selectors.metadataWaitSelectors ?? []).map((selector) =>
+          page
+            .waitForSelector(selector, { timeout: 3_000 })
+            .catch(() => undefined),
+        ),
+      );
+      snapshot = await page.evaluate(extractInPage, selectors);
+      result = interpretPageSnapshot({
+        ...snapshot,
+        url: page.url(),
+        httpStatus,
+      });
+      if (!result.ok && result.failure.code === "SOURCE_ACCESS_RESTRICTED") {
+        // 正文已出现但仍判定受限（罕见），稍作等待避免空转。
+        await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+      }
+    }
+    return { result, snapshot };
   }
 
   async close(): Promise<void> {
@@ -623,7 +709,7 @@ export function readBrowserConfiguration(
   environment: NodeJS.ProcessEnv = process.env,
 ): Pick<
   PlaywrightReaderOptions,
-  "channel" | "executablePath" | "headless" | "minIntervalMs"
+  "channel" | "executablePath" | "headless" | "minIntervalMs" | "interactiveWaitMs"
 > {
   return {
     channel: environment.ZHIHU_BROWSER_CHANNEL?.trim() || "chrome",
@@ -633,6 +719,9 @@ export function readBrowserConfiguration(
       ? environment.ZHIHU_BROWSER_HEADLESS.trim() === "true"
       : true,
     minIntervalMs: Number(environment.ZHIHU_READ_MIN_INTERVAL_MS ?? 3_000),
+    interactiveWaitMs: Number(
+      environment.ZHIHU_READ_INTERACTIVE_WAIT_MS ?? 120_000,
+    ),
   };
 }
 

@@ -147,6 +147,34 @@ function registerIpcHandlers(): void {
     return requireApi().retryTask(taskId);
   });
 
+  ipcMain.handle("desktop:delete-task", async (_event, taskId: unknown) => {
+    if (typeof taskId !== "string" || taskId.length === 0) {
+      throw new Error("任务参数无效。");
+    }
+    return requireApi().deleteTask(taskId);
+  });
+
+  ipcMain.handle(
+    "desktop:batch-delete-tasks",
+    async (_event, taskIds: unknown) => {
+      if (
+        !Array.isArray(taskIds) ||
+        taskIds.length === 0 ||
+        !taskIds.every((id) => typeof id === "string" && id.length > 0)
+      ) {
+        throw new Error("批量删除参数无效。");
+      }
+      return requireApi().batchDeleteTasks(taskIds as string[]);
+    },
+  );
+
+  ipcMain.handle("desktop:delete-batch", async (_event, batchId: unknown) => {
+    if (typeof batchId !== "string" || batchId.length === 0) {
+      throw new Error("批次参数无效。");
+    }
+    return requireApi().deleteBatch(batchId);
+  });
+
   ipcMain.handle(
     "desktop:task-preview-image",
     async (_event, taskId: unknown) => {
@@ -371,6 +399,9 @@ app.on("will-quit", () => {
   ipcMain.removeHandler("desktop:rerender-tail");
   ipcMain.removeHandler("desktop:save-manual-content");
   ipcMain.removeHandler("desktop:retry-task");
+  ipcMain.removeHandler("desktop:delete-task");
+  ipcMain.removeHandler("desktop:batch-delete-tasks");
+  ipcMain.removeHandler("desktop:delete-batch");
   ipcMain.removeHandler("desktop:task-preview-image");
   ipcMain.removeHandler("desktop:download-video");
   ipcMain.removeHandler("desktop:download-images");

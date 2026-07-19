@@ -1,9 +1,11 @@
-import { Download, Eye, FileSpreadsheet, Sparkles } from "lucide-react";
+import { Download, Eye, FileSpreadsheet, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import type { BatchSummary } from "@zhihu-video/contracts";
 
 import { apiClient } from "../api/client";
+import { ConfirmDialog } from "../components/ConfirmDialog";
+import { useToast } from "../components/Toast";
 
 function formatCreatedAt(value: string): string {
   return new Intl.DateTimeFormat("zh-CN", {
@@ -13,33 +15,38 @@ function formatCreatedAt(value: string): string {
 }
 
 export function TaskHistoryPage() {
+  const { toast } = useToast();
   const [batches, setBatches] = useState<BatchSummary[] | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<BatchSummary | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   useEffect(() => {
     apiClient
       .getBatches()
       .then(setBatches)
       .catch((error: unknown) =>
-        setNotice(
+        toast(
           error instanceof Error ? error.message : "读取批次记录失败。",
+          "error",
         ),
       );
-  }, []);
+  }, [toast]);
 
   async function handleDownload(batchId: string, asset: "batch" | "workbook") {
-    // The desktop shell blocks window.open, so downloads go through the
-    // preload bridge and a native save dialog instead.
     if (window.desktop) {
       try {
         const savedPath =
           asset === "batch"
             ? await window.desktop.downloadBatch(batchId)
             : await window.desktop.downloadResultWorkbook(batchId);
-        setNotice(savedPath ? `已保存到：${savedPath}` : "已取消保存。");
+        toast(
+          savedPath ? `已保存到：${savedPath}` : "已取消保存。",
+          savedPath ? "success" : "info",
+        );
       } catch (error) {
-        setNotice(
+        toast(
           error instanceof Error ? error.message : "下载失败，请稍后再试。",
+          "error",
         );
       }
       return;
@@ -49,6 +56,23 @@ export function TaskHistoryPage() {
         ? apiClient.getBatchDownloadUrl(batchId)
         : apiClient.getResultWorkbookUrl(batchId);
     window.open(url, "_blank", "noopener,noreferrer");
+  }
+
+  async function confirmDeleteBatch() {
+    if (!deleteTarget) return;
+    setIsDeleting(true);
+    try {
+      await apiClient.deleteBatch(deleteTarget.id);
+      setBatches((current) =>
+        current ? current.filter((b) => b.id !== deleteTarget.id) : current,
+      );
+      toast(`批次「${deleteTarget.sourceFileName}」已删除。`, "success");
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "删除批次失败。", "error");
+    } finally {
+      setIsDeleting(false);
+      setDeleteTarget(null);
+    }
   }
 
   if (!batches) return <div className="page-loading">正在读取批次记录…</div>;
@@ -64,20 +88,6 @@ export function TaskHistoryPage() {
           </p>
         </div>
       </header>
-
-      {notice ? (
-        <div className="notice" role="status">
-          <Sparkles size={16} />
-          {notice}
-          <button
-            type="button"
-            onClick={() => setNotice(null)}
-            aria-label="关闭提示"
-          >
-            ×
-          </button>
-        </div>
-      ) : null}
 
       {batches.length === 0 ? (
         <section className="empty-workbench" aria-label="空记录">
@@ -140,11 +150,32 @@ export function TaskHistoryPage() {
                   <Download size={16} />
                   下载成品
                 </button>
+                <button
+                  type="button"
+                  className="button button-outline-danger"
+                  onClick={() => setDeleteTarget(batch)}
+                  aria-label={`删除批次 ${batch.sourceFileName}`}
+                >
+                  <Trash2 size={16} />
+                  删除
+                </button>
               </div>
             </section>
           ))}
         </div>
       )}
+
+      {deleteTarget ? (
+        <ConfirmDialog
+          title="删除批次"
+          description={`确定要删除批次「${deleteTarget.sourceFileName}」及其所有任务和产物吗？此操作不可撤销。`}
+          confirmLabel="删除批次"
+          danger
+          isLoading={isDeleting}
+          onConfirm={() => void confirmDeleteBatch()}
+          onCancel={() => setDeleteTarget(null)}
+        />
+      ) : null}
     </div>
   );
 }

@@ -146,6 +146,11 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
             { reason },
             "zhihu reader escalated to a visible browser window",
           ),
+        onInteractiveWait: (reason) =>
+          app.log.warn(
+            { reason },
+            "zhihu reader waiting for operator login/verification",
+          ),
       })
     : null;
   const taskWorker =
@@ -383,6 +388,109 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
         ),
       );
       return reply.send(workbookBuffer);
+    },
+  );
+
+  app.delete<{ Params: { id: string } }>(
+    "/api/tasks/:id",
+    async (request, reply) => {
+      const task = repository.getTask(request.params.id);
+      if (!task) {
+        return reply
+          .status(404)
+          .send({ error: "TASK_NOT_FOUND", message: "任务不存在" });
+      }
+      const activeStatuses = [
+        "fetching",
+        "summarizing",
+        "rendering_images",
+        "rendering_video",
+      ];
+      if (activeStatuses.includes(task.status)) {
+        return reply.status(409).send({
+          error: "TASK_IN_PROGRESS",
+          message: "任务正在处理中，无法删除。请等待完成或失败后再操作。",
+        });
+      }
+      const result = repository.deleteTask(request.params.id);
+      if (result?.outputDirectory) {
+        const dir = resolve(result.outputDirectory);
+        if (isInsideOutputRoot(dir, options.outputDirectory)) {
+          await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+        }
+      }
+      return { ok: true };
+    },
+  );
+
+  const batchDeleteSchema = z
+    .object({ taskIds: z.array(z.string().min(1)).min(1).max(200) })
+    .strict();
+
+  app.post("/api/tasks/batch-delete", async (request, reply) => {
+    const { taskIds } = batchDeleteSchema.parse(request.body);
+    // Verify none are actively processing
+    const activeStatuses = [
+      "fetching",
+      "summarizing",
+      "rendering_images",
+      "rendering_video",
+    ];
+    for (const taskId of taskIds) {
+      const task = repository.getTask(taskId);
+      if (task && activeStatuses.includes(task.status)) {
+        return reply.status(409).send({
+          error: "TASK_IN_PROGRESS",
+          message: `任务「${task.fetchedTitle ?? task.inputTitle ?? taskId}」正在处理中，无法删除。`,
+        });
+      }
+    }
+    const { deletedCount, outputDirectories } = repository.deleteTasks(taskIds);
+    // Clean up artifact directories
+    for (const dir of outputDirectories) {
+      const resolved = resolve(dir);
+      if (isInsideOutputRoot(resolved, options.outputDirectory)) {
+        await rm(resolved, { recursive: true, force: true }).catch(() => undefined);
+      }
+    }
+    return { ok: true, deletedCount };
+  });
+
+  app.delete<{ Params: { id: string } }>(
+    "/api/batches/:id",
+    async (request, reply) => {
+      const batch = repository.getBatch(request.params.id);
+      if (!batch) {
+        return reply
+          .status(404)
+          .send({ error: "BATCH_NOT_FOUND", message: "批次不存在" });
+      }
+      // Block deletion if any task is actively processing
+      const activeStatuses = [
+        "fetching",
+        "summarizing",
+        "rendering_images",
+        "rendering_video",
+      ];
+      const hasActive = batch.tasks.some((task) =>
+        activeStatuses.includes(task.status),
+      );
+      if (hasActive) {
+        return reply.status(409).send({
+          error: "BATCH_IN_PROGRESS",
+          message: "批次内仍有任务正在处理中，无法删除整个批次。",
+        });
+      }
+      const result = repository.deleteBatch(request.params.id);
+      if (result) {
+        for (const dir of result.outputDirectories) {
+          const resolved = resolve(dir);
+          if (isInsideOutputRoot(resolved, options.outputDirectory)) {
+            await rm(resolved, { recursive: true, force: true }).catch(() => undefined);
+          }
+        }
+      }
+      return { ok: true };
     },
   );
 

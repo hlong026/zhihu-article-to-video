@@ -30,6 +30,12 @@ contextBridge.exposeInMainWorld("desktop", {
     }),
   retryTask: (taskId: string) =>
     ipcRenderer.invoke("desktop:retry-task", taskId),
+  deleteTask: (taskId: string) =>
+    ipcRenderer.invoke("desktop:delete-task", taskId),
+  batchDeleteTasks: (taskIds: string[]) =>
+    ipcRenderer.invoke("desktop:batch-delete-tasks", taskIds),
+  deleteBatch: (batchId: string) =>
+    ipcRenderer.invoke("desktop:delete-batch", batchId),
   taskPreviewImage: (taskId: string) =>
     ipcRenderer.invoke("desktop:task-preview-image", taskId),
   downloadVideo: (taskId: string): Promise<string | null> =>

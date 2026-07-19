@@ -1,4 +1,8 @@
-import { countBodyCharacters } from "./pagination.js";
+import {
+  countBodyCharacters,
+  defaultPagination,
+  measureBodyLayout,
+} from "./pagination.js";
 import type { SourcePageMeta } from "./source.js";
 
 /** Kept structurally compatible with @zhihu-video/contracts for API handoff. */
@@ -53,8 +57,13 @@ export interface SummaryValidationResult {
 export const videoTitleMaxLength = 22;
 export const bodyPageMaxCount = 10;
 export const bodyPageMinCharacters = 38;
-/** Defensive ceiling; equals 18 chars x 18 lines, the paginator's full page. */
+/**
+ * 整页宽字符（CJK）容量：18 字 × 18 行。保留作参考常量；实际门禁按行数判定
+ * （见 bodyPageMaxLines），因为窄字符（ASCII）每格可排两个，纯字符数会对其误报。
+ */
 export const bodyPageMaxCharacters = 324;
+/** 单页最大行数，与分页器 linesPerPage 一致：超出即排不下单张卡片。 */
+export const bodyPageMaxLines = defaultPagination.linesPerPage;
 
 /**
  * The AI only produces the video title and tags; body pages come straight
@@ -181,7 +190,7 @@ export function validateVideoSummary(
         pageIndex,
       });
     }
-    if (bodyLength > bodyPageMaxCharacters) {
+    if (measureBodyLayout(page.body).lineCount > bodyPageMaxLines) {
       issues.push({
         code: "CARD_BODY_TOO_LONG",
         message: "卡片正文超出单页排版容量。",

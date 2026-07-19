@@ -653,6 +653,89 @@ export class TaskRepository {
     }
   }
 
+  /**
+   * Deletes a single task (only terminal states allowed) and returns its
+   * output directory (if any) so the caller can clean up artifacts on disk.
+   */
+  deleteTask(taskId: string): { outputDirectory: string | null } | null {
+    const row = this.database
+      .prepare("SELECT id, status, output_dir FROM article_tasks WHERE id = ?")
+      .get(taskId) as
+      | { id: string; status: TaskStatus; output_dir: string | null }
+      | undefined;
+    if (!row) return null;
+    const outputDirectory = row.output_dir;
+    this.database.transaction(() => {
+      this.database
+        .prepare("DELETE FROM task_attempts WHERE task_id = ?")
+        .run(taskId);
+      this.database
+        .prepare("DELETE FROM article_tasks WHERE id = ?")
+        .run(taskId);
+    })();
+    return { outputDirectory };
+  }
+
+  /**
+   * Batch-deletes multiple tasks. Returns the list of output directories that
+   * should be cleaned up by the caller.
+   */
+  deleteTasks(taskIds: string[]): { deletedCount: number; outputDirectories: string[] } {
+    const outputDirectories: string[] = [];
+    let deletedCount = 0;
+    this.database.transaction(() => {
+      for (const taskId of taskIds) {
+        const row = this.database
+          .prepare("SELECT id, output_dir FROM article_tasks WHERE id = ?")
+          .get(taskId) as { id: string; output_dir: string | null } | undefined;
+        if (!row) continue;
+        if (row.output_dir) outputDirectories.push(row.output_dir);
+        this.database
+          .prepare("DELETE FROM task_attempts WHERE task_id = ?")
+          .run(taskId);
+        this.database
+          .prepare("DELETE FROM article_tasks WHERE id = ?")
+          .run(taskId);
+        deletedCount++;
+      }
+    })();
+    return { deletedCount, outputDirectories };
+  }
+
+  /**
+   * Deletes an entire batch, all its tasks, import errors, and attempt logs.
+   * Returns output directories for artifact cleanup.
+   */
+  deleteBatch(batchId: string): { outputDirectories: string[] } | null {
+    const batch = this.database
+      .prepare("SELECT id FROM batches WHERE id = ?")
+      .get(batchId) as { id: string } | undefined;
+    if (!batch) return null;
+    const taskRows = this.database
+      .prepare("SELECT id, output_dir FROM article_tasks WHERE batch_id = ?")
+      .all(batchId) as Array<{ id: string; output_dir: string | null }>;
+    const outputDirectories = taskRows
+      .map((row) => row.output_dir)
+      .filter((dir): dir is string => dir !== null);
+    this.database.transaction(() => {
+      for (const task of taskRows) {
+        this.database
+          .prepare("DELETE FROM task_attempts WHERE task_id = ?")
+          .run(task.id);
+      }
+      this.database
+        .prepare("DELETE FROM article_tasks WHERE batch_id = ?")
+        .run(batchId);
+      this.database
+        .prepare("DELETE FROM import_errors WHERE batch_id = ?")
+        .run(batchId);
+      this.database
+        .prepare("DELETE FROM batches WHERE id = ?")
+        .run(batchId);
+    })();
+    return { outputDirectories };
+  }
+
   private logAttempt(
     taskId: string,
     step: string,

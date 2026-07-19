@@ -31,6 +31,13 @@ const stageRoot = join(desktopRoot, ".stage");
 const apiDeployment = join(stageRoot, "api");
 const run = promisify(execFile);
 
+// 应用图标资源（由 scripts/build-icons.mjs 从 icon.png 生成 ico/icns）。
+const resourcesDirectory = join(desktopRoot, "resources");
+const iconIco = join(resourcesDirectory, "icon.ico");
+const iconIcns = join(resourcesDirectory, "icon.icns");
+// 安装包版本号：沿用桌面包 package.json 的 version，构建号由 CI 注入。
+const appVersion = require(join(desktopRoot, "package.json")).version;
+
 /**
  * npm 上最新的 better-sqlite3 12.11.1 尚未发布 Electron 43（ABI 148）的
  * 预编译二进制，12.12.0 起官方才开始提供。已实测 12.11.1 的 JS 层与
@@ -89,7 +96,9 @@ if (targetPlatform === "darwin") {
   await addApplicationResources(
     join(targetApp, "Contents", "Resources", "app"),
   );
+  await assertMacOSIcon(targetApp);
   await verifyMacOSBundle(targetApp);
+  await createMacOSDmg(targetApp);
   console.log(`已生成 macOS 应用：${targetApp}`);
 } else {
   const winDist = await ensureElectronDist("win32", targetArch);
@@ -103,14 +112,26 @@ if (targetPlatform === "darwin") {
     join(targetDirectory, `${productName}.exe`),
   );
   await addApplicationResources(join(targetDirectory, "resources", "app"));
+  await embedWindowsIcon(targetDirectory);
   await reportWindowsBinaries(targetDirectory);
+  if (process.platform === "win32") {
+    // exe 与安装器只能在 Windows 上运行校验；macOS 交叉打包仅产出便携 zip。
+    await verifyWindowsBundle(targetDirectory);
+    const installerPath = await buildWindowsInstaller(targetDirectory);
+    if (installerPath) {
+      await verifyWindowsInstaller(installerPath);
+    }
+  } else {
+    console.warn(
+      "交叉打包：跳过 Windows 模块加载校验与 NSIS 安装器（需在 Windows 原生构建）。",
+    );
+  }
   await archiveWindowsOutput(targetDirectory);
 }
 
 /** pnpm deploy 偶发 EPERM，重试几次即可恢复。 */
 async function deployApi() {
   const args = [
-    "pnpm@11.7.0",
     "--filter",
     "@zhihu-video/api",
     "deploy",
@@ -121,13 +142,19 @@ async function deployApi() {
     // 拷贝到应用包后在 Windows 上也能直接运行。
     "--config.node-linker=hoisted",
   ];
+  // 不再经 corepack 调用：Windows 上 corepack 只有 .cmd shim，execFile 不经
+  // shell 无法执行（spawn corepack ENOENT）。直接调用工作区已安装的 pnpm——
+  // CI 由 pnpm/action-setup 提供独立 pnpm.exe，本地多为 pnpm.cmd；Windows 下
+  // 借助 shell 让 cmd.exe 按 PATHEXT 解析可执行文件，两种安装都能命中。
+  const options = {
+    cwd: projectRoot,
+    maxBuffer: 8 * 1024 * 1024,
+    shell: process.platform === "win32",
+  };
   let lastError;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
-      await run("corepack", args, {
-        cwd: projectRoot,
-        maxBuffer: 8 * 1024 * 1024,
-      });
+      await run("pnpm", args, options);
       return;
     } catch (error) {
       lastError = error;
@@ -303,33 +330,84 @@ async function ensureElectronDist(platform, arch) {
   return cacheDirectory;
 }
 
-/** 修正 macOS 应用包的显示名称（菜单栏与 Finder 展示）。 */
-async function patchInfoPlist(targetApp) {
-  const plist = join(targetApp, "Contents", "Info.plist");
-  for (const key of ["CFBundleName", "CFBundleDisplayName"]) {
-    try {
-      await run("/usr/libexec/PlistBuddy", [
-        "-c",
-        `Set :${key} ${displayName}`,
-        plist,
-      ]);
-    } catch {
-      await run("/usr/libexec/PlistBuddy", [
-        "-c",
-        `Add :${key} string ${displayName}`,
-        plist,
-      ]);
-    }
+/** PlistBuddy 先尝试 Set，键不存在时退回 Add。 */
+async function setPlistValue(plist, key, value) {
+  try {
+    await run("/usr/libexec/PlistBuddy", ["-c", `Set :${key} ${value}`, plist]);
+  } catch {
+    await run("/usr/libexec/PlistBuddy", [
+      "-c",
+      `Add :${key} string ${value}`,
+      plist,
+    ]);
   }
 }
 
+/** 修正 macOS 应用包的显示名称与图标（菜单栏、Finder 与程序坞展示）。 */
+async function patchInfoPlist(targetApp) {
+  const plist = join(targetApp, "Contents", "Info.plist");
+  for (const key of ["CFBundleName", "CFBundleDisplayName"]) {
+    await setPlistValue(plist, key, displayName);
+  }
+  if (existsSync(iconIcns)) {
+    // 拷入自定义图标并让 Info.plist 指向它（值不含 .icns 扩展名）。
+    await cp(iconIcns, join(targetApp, "Contents", "Resources", "AppIcon.icns"));
+    await setPlistValue(plist, "CFBundleIconFile", "AppIcon");
+    await setPlistValue(plist, "CFBundleIconName", "AppIcon");
+  } else {
+    console.warn("缺少 resources/icon.icns，macOS 应用沿用 Electron 默认图标。");
+  }
+}
+
+/** 断言 macOS 应用包已正确携带自定义图标。 */
+async function assertMacOSIcon(targetApp) {
+  const iconPath = join(targetApp, "Contents", "Resources", "AppIcon.icns");
+  if (!existsSync(iconPath)) {
+    throw new Error("macOS 应用包缺少 AppIcon.icns。");
+  }
+  const plist = join(targetApp, "Contents", "Info.plist");
+  const { stdout } = await run("/usr/libexec/PlistBuddy", [
+    "-c",
+    "Print :CFBundleIconFile",
+    plist,
+  ]);
+  if (!stdout.trim().includes("AppIcon")) {
+    throw new Error("macOS Info.plist 未正确设置 CFBundleIconFile。");
+  }
+  console.log("macOS 应用图标校验通过。");
+}
+
+/** 用系统自带 hdiutil 由 .app 生成只读 DMG 分发镜像。 */
+async function createMacOSDmg(targetApp) {
+  const dmgPath = join(outputRoot, `${productName}-macos-${targetArch}.dmg`);
+  await rm(dmgPath, { force: true });
+  await run(
+    "hdiutil",
+    [
+      "create",
+      "-volname",
+      displayName,
+      "-srcfolder",
+      targetApp,
+      "-ov",
+      "-format",
+      "UDZO",
+      dmgPath,
+    ],
+    { maxBuffer: 16 * 1024 * 1024 },
+  );
+  if (!existsSync(dmgPath)) {
+    throw new Error("DMG 生成后未找到产物。");
+  }
+  console.log(`已生成 macOS 磁盘映像：${dmgPath}`);
+  return dmgPath;
+}
+
 /**
- * 用打包后的二进制直接加载应用内的原生模块与工作区包，
- * 在打包阶段暴露 ABI 不匹配或入口解析失败。
+ * 用打包后的二进制以 Node 模式加载应用内的原生模块与工作区包，
+ * 在打包阶段暴露 ABI 不匹配或入口解析失败。macOS 与 Windows 共用。
  */
-async function verifyMacOSBundle(targetApp) {
-  const binary = join(targetApp, "Contents", "MacOS", "Electron");
-  const appDirectory = join(targetApp, "Contents", "Resources", "app");
+async function runModuleLoadCheck(binary, appDirectory) {
   const databasePath = join(stageRoot, "verify.sqlite");
   const script = `
     import(${JSON.stringify(pathToFileURL(join(appDirectory, "api", "dist", "src", "app.js")).href)})
@@ -353,7 +431,121 @@ async function verifyMacOSBundle(targetApp) {
   });
   await rm(databasePath, { force: true });
   await rm(join(stageRoot, "verify-outputs"), { recursive: true, force: true });
+}
+
+async function verifyMacOSBundle(targetApp) {
+  const binary = join(targetApp, "Contents", "MacOS", "Electron");
+  const appDirectory = join(targetApp, "Contents", "Resources", "app");
+  await runModuleLoadCheck(binary, appDirectory);
   console.log("macOS 应用内模块加载校验通过。");
+}
+
+/** Windows 主程序以 Node 模式加载应用模块，校验 better-sqlite3 ABI 与入口解析。 */
+async function verifyWindowsBundle(targetDirectory) {
+  const binary = join(targetDirectory, `${productName}.exe`);
+  const appDirectory = join(targetDirectory, "resources", "app");
+  await runModuleLoadCheck(binary, appDirectory);
+  console.log("Windows 应用内模块加载校验通过。");
+}
+
+/**
+ * 用 rcedit 将 icon.ico 与版本信息嵌入 Windows 主程序。
+ * macOS 交叉打包缺少 wine 时无法运行 rcedit，告警并保留默认图标，不致构建失败。
+ */
+async function embedWindowsIcon(targetDirectory) {
+  if (!existsSync(iconIco)) {
+    console.warn("缺少 resources/icon.ico，跳过 Windows 图标嵌入。");
+    return;
+  }
+  const exePath = join(targetDirectory, `${productName}.exe`);
+  try {
+    const { rcedit } = await import("rcedit");
+    await rcedit(exePath, {
+      icon: iconIco,
+      "file-version": `${appVersion}.0`,
+      "product-version": `${appVersion}.0`,
+      "version-string": {
+        ProductName: displayName,
+        FileDescription: displayName,
+        CompanyName: productName,
+        OriginalFilename: `${productName}.exe`,
+        LegalCopyright: `Copyright (c) ${productName}`,
+      },
+    });
+    console.log("已为 Windows 主程序嵌入图标与版本信息。");
+  } catch (error) {
+    console.warn(
+      `Windows 图标嵌入失败（交叉打包可能缺少 wine）：${error.message}`,
+    );
+  }
+}
+
+/** makensis 是否在 PATH 中可用（windows-latest Runner 已预装 NSIS）。 */
+async function findMakensis() {
+  try {
+    await run("makensis", ["-VERSION"], { maxBuffer: 1024 * 1024 });
+    return "makensis";
+  } catch {
+    return null;
+  }
+}
+
+/** 调用 makensis 由应用目录生成 NSIS 安装器；缺工具时返回 null（仍产出便携 zip）。 */
+async function buildWindowsInstaller(targetDirectory) {
+  const makensis = await findMakensis();
+  if (!makensis) {
+    console.warn("未找到 makensis，跳过 NSIS 安装器生成（仍产出便携 zip）。");
+    return null;
+  }
+  const installerPath = join(
+    outputRoot,
+    `${productName}-${targetPlatform}-${targetArch}-Setup.exe`,
+  );
+  await rm(installerPath, { force: true });
+  await run(
+    makensis,
+    [
+      `/DVERSION=${appVersion}`,
+      `/DSRC=${targetDirectory}`,
+      `/DOUT_FILE=${installerPath}`,
+      `/DICON=${iconIco}`,
+      `/DEXE_NAME=${productName}.exe`,
+      join(desktopRoot, "scripts", "installer.nsi"),
+    ],
+    { cwd: desktopRoot, maxBuffer: 16 * 1024 * 1024 },
+  );
+  if (!existsSync(installerPath)) {
+    throw new Error("NSIS 安装器生成后未找到产物。");
+  }
+  console.log(`已生成 Windows 安装器：${installerPath}`);
+  return installerPath;
+}
+
+/**
+ * NSIS 安装器冒烟：静默安装到临时目录 → 用已安装主程序做模块加载校验 →
+ * 静默卸载清理。覆盖“安装无错误 + 启动正常 + 功能基线”。
+ */
+async function verifyWindowsInstaller(installerPath) {
+  const installDirectory = join(stageRoot, "verify-install");
+  await rm(installDirectory, { recursive: true, force: true });
+  // NSIS 静默安装：/S 配合 /D 指定目录，/D 必须置末且不带引号。
+  await run(installerPath, ["/S", `/D=${installDirectory}`], {
+    maxBuffer: 8 * 1024 * 1024,
+  });
+  const installedExe = join(installDirectory, `${productName}.exe`);
+  if (!existsSync(installedExe)) {
+    throw new Error("NSIS 静默安装后未找到主程序。");
+  }
+  await verifyWindowsBundle(installDirectory);
+  const uninstaller = join(installDirectory, "Uninstall.exe");
+  if (existsSync(uninstaller)) {
+    // _?= 使卸载器同步就地运行（不拷到临时目录），便于随后清理。
+    await run(uninstaller, ["/S", `_?=${installDirectory}`], {
+      maxBuffer: 8 * 1024 * 1024,
+    });
+  }
+  await rm(installDirectory, { recursive: true, force: true });
+  console.log("Windows 安装器静默安装/卸载校验通过。");
 }
 
 /** 打印 Windows 关键二进制格式，确认交叉替换产物正确。 */

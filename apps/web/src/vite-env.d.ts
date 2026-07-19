@@ -40,6 +40,11 @@ declare global {
         content: string,
       ): Promise<ArticleTask>;
       retryTask(taskId: string): Promise<ArticleTask>;
+      deleteTask(taskId: string): Promise<{ ok: boolean }>;
+      batchDeleteTasks(
+        taskIds: string[],
+      ): Promise<{ ok: boolean; deletedCount: number }>;
+      deleteBatch(batchId: string): Promise<{ ok: boolean }>;
       /** Returns the first rendered card's bytes for previewing. */
       taskPreviewImage(taskId: string): Promise<{
         contentType: string;
