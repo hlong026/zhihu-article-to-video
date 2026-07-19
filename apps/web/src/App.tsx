@@ -4,11 +4,13 @@ import {
   LayoutDashboard,
   PanelLeftClose,
   PanelLeftOpen,
+  Settings,
 } from "lucide-react";
 import { useState } from "react";
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 
 import { BatchDetailPage } from "./pages/BatchDetailPage";
+import { SettingsPage } from "./pages/SettingsPage";
 import { TaskHistoryPage } from "./pages/TaskHistoryPage";
 import { WorkbenchPage } from "./pages/WorkbenchPage";
 import { ToastProvider } from "./components/Toast";
@@ -17,6 +19,7 @@ import "./styles/app.css";
 const navigation = [
   { to: "/workbench", label: "工作台", icon: LayoutDashboard },
   { to: "/history", label: "任务记录", icon: Files },
+  { to: "/settings", label: "设置", icon: Settings },
 ];
 
 const SIDEBAR_COLLAPSED_KEY = "sidebar-collapsed";
@@ -95,6 +98,7 @@ export function App() {
             <Route path="/workbench" element={<WorkbenchPage />} />
             <Route path="/history" element={<TaskHistoryPage />} />
             <Route path="/history/:batchId" element={<BatchDetailPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
             <Route path="*" element={<Navigate to="/workbench" replace />} />
           </Routes>
         </main>

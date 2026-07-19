@@ -49,7 +49,7 @@ export interface PlaywrightReaderOptions {
   onEscalate?: (reason: string) => void;
   /**
    * Maximum time (ms) to keep waiting for the operator to complete login or
-   * verification in a visible window before giving up. Defaults to 120_000.
+   * verification in a visible window before giving up. Defaults to 180_000.
    */
   interactiveWaitMs?: number;
   /** Called when the reader starts waiting for operator login/verification. */
@@ -404,7 +404,7 @@ export class PlaywrightZhihuContentReader implements ZhihuContentReader {
   constructor(private readonly options: PlaywrightReaderOptions) {
     this.minIntervalMs = Math.max(0, options.minIntervalMs ?? 3_000);
     this.navigationTimeoutMs = options.navigationTimeoutMs ?? 30_000;
-    this.interactiveWaitMs = Math.max(0, options.interactiveWaitMs ?? 120_000);
+    this.interactiveWaitMs = Math.max(0, options.interactiveWaitMs ?? 180_000);
     this.headlessActive = options.headless ?? true;
   }
 
@@ -495,11 +495,12 @@ export class PlaywrightZhihuContentReader implements ZhihuContentReader {
         httpStatus,
       });
 
-      // 可见模式下命中登录/验证/风控墙：停在当前页等待用户完成操作，
-      // 而非立即失败，避免“刚弹窗就翻页”导致无法扫码/拖滑块。
+      // 可见模式下命中登录/验证/风控墙（或正文为空——首次无登录态时
+      // 知乎可能不做 /signin 重定向而只是不渲染正文）：停在当前页等待
+      // 用户完成操作，而非立即失败，避免"刚弹窗就翻页"导致无法扫码/拖滑块。
       if (
         !result.ok &&
-        result.failure.code === "SOURCE_ACCESS_RESTRICTED" &&
+        isInteractiveWaitCode(result.failure.code) &&
         !this.headlessActive
       ) {
         ({ result, snapshot } = await this.waitForInteractiveAccess(
@@ -569,7 +570,7 @@ export class PlaywrightZhihuContentReader implements ZhihuContentReader {
     // 当次任务即可成功，无需手动重试。
     while (
       !result.ok &&
-      result.failure.code === "SOURCE_ACCESS_RESTRICTED" &&
+      isInteractiveWaitCode(result.failure.code) &&
       Date.now() < deadline
     ) {
       const contentReady = await page
@@ -593,8 +594,8 @@ export class PlaywrightZhihuContentReader implements ZhihuContentReader {
         url: page.url(),
         httpStatus,
       });
-      if (!result.ok && result.failure.code === "SOURCE_ACCESS_RESTRICTED") {
-        // 正文已出现但仍判定受限（罕见），稍作等待避免空转。
+      if (!result.ok && isInteractiveWaitCode(result.failure.code)) {
+        // 正文已出现但仍判定受限/为空（罕见），稍作等待避免空转。
         await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
       }
     }
@@ -727,9 +728,22 @@ export function readBrowserConfiguration(
       : true,
     minIntervalMs: Number(environment.ZHIHU_READ_MIN_INTERVAL_MS ?? 3_000),
     interactiveWaitMs: Number(
-      environment.ZHIHU_READ_INTERACTIVE_WAIT_MS ?? 120_000,
+      environment.ZHIHU_READ_INTERACTIVE_WAIT_MS ?? 180_000,
     ),
   };
+}
+
+/**
+ * Failure codes that may indicate a login/verification wall rather than a
+ * permanent error. In visible mode these trigger the interactive wait so the
+ * operator can complete authentication. CONTENT_EMPTY is included because a
+ * fresh profile without cookies often gets a page where Zhihu simply does not
+ * render the article body (no /signin redirect, just empty content selectors).
+ */
+function isInteractiveWaitCode(
+  code: string,
+): code is "SOURCE_ACCESS_RESTRICTED" | "CONTENT_EMPTY" {
+  return code === "SOURCE_ACCESS_RESTRICTED" || code === "CONTENT_EMPTY";
 }
 
 function failure(

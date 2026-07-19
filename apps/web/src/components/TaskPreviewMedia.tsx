@@ -1,5 +1,5 @@
-import { AlertTriangle, ImageOff } from "lucide-react";
-import { useEffect, useState } from "react";
+import { AlertTriangle, ImageOff, Play } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import type { ArticleTask, ArticleTaskDetail } from "@zhihu-video/contracts";
 
 import { apiClient, isActiveTaskStatus } from "../api/client";
@@ -63,6 +63,89 @@ function formatDuration(totalSeconds: number): string {
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
+interface CompletedPreviewProps {
+  task: ArticleTask;
+  artifacts: { imageCount: number; videoReady: boolean; durationSeconds: number } | null;
+  canStreamVideo: boolean;
+}
+
+/** Shows a cover poster with a play button; clicking starts video playback. */
+function CompletedPreview({ task, artifacts, canStreamVideo }: CompletedPreviewProps) {
+  const [isPlaying, setIsPlaying] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  // Reset play state when switching tasks
+  useEffect(() => {
+    setIsPlaying(false);
+  }, [task.id, task.updatedAt]);
+
+  // Autoplay once the video element is mounted and has enough data
+  useEffect(() => {
+    if (!isPlaying) return;
+    const video = videoRef.current;
+    if (!video) return;
+    if (video.readyState >= 3) {
+      video.play().catch(() => undefined);
+    } else {
+      const onCanPlay = () => video.play().catch(() => undefined);
+      video.addEventListener("canplay", onCanPlay, { once: true });
+      return () => video.removeEventListener("canplay", onCanPlay);
+    }
+  }, [isPlaying]);
+
+  function handlePlayClick() {
+    setIsPlaying(true);
+  }
+
+  return (
+    <div className="preview-media">
+      {isPlaying && canStreamVideo ? (
+        <video
+          ref={videoRef}
+          key={`${task.id}-${task.updatedAt}`}
+          className="preview-media-video"
+          controls
+          autoPlay
+          preload="metadata"
+          src={apiClient.getDownloadUrl(task.id, "video")}
+        />
+      ) : canStreamVideo ? (
+        <div
+          className="preview-media-poster"
+          role="button"
+          tabIndex={0}
+          aria-label="播放视频"
+          onClick={handlePlayClick}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") handlePlayClick();
+          }}
+        >
+          <PreviewImage task={task} />
+          <div className="preview-play-overlay">
+            <span className="preview-play-button">
+              <Play size={26} fill="currentColor" />
+            </span>
+          </div>
+        </div>
+      ) : artifacts && artifacts.imageCount > 0 ? (
+        <PreviewImage task={task} />
+      ) : (
+        <div className="preview-media-fallback" role="note">
+          <ImageOff size={20} />
+          <span>产物已被清理，可重试任务重新生成。</span>
+        </div>
+      )}
+      {artifacts ? (
+        <p className="preview-media-meta">
+          共 {artifacts.imageCount} 页 · 约{" "}
+          {formatDuration(artifacts.durationSeconds)}
+          {artifacts.videoReady && !isPlaying ? " · 点击播放预览" : ""}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 /**
  * Real preview surface: the rendered video / cover image for finished tasks,
  * the pipeline stepper for running ones, and the failure context otherwise.
@@ -84,33 +167,13 @@ export function TaskPreviewMedia({ task, detail }: TaskPreviewMediaProps) {
   }
 
   if (task.status === "completed") {
-    const canStreamVideo = !window.desktop && artifacts?.videoReady;
+    const canStreamVideo = artifacts?.videoReady;
     return (
-      <div className="preview-media">
-        {canStreamVideo ? (
-          <video
-            key={`${task.id}-${task.updatedAt}`}
-            className="preview-media-video"
-            controls
-            preload="metadata"
-            src={apiClient.getDownloadUrl(task.id, "video")}
-          />
-        ) : artifacts && artifacts.imageCount > 0 ? (
-          <PreviewImage task={task} />
-        ) : (
-          <div className="preview-media-fallback" role="note">
-            <ImageOff size={20} />
-            <span>产物已被清理，可重试任务重新生成。</span>
-          </div>
-        )}
-        {artifacts ? (
-          <p className="preview-media-meta">
-            共 {artifacts.imageCount} 页 · 约{" "}
-            {formatDuration(artifacts.durationSeconds)}
-            {window.desktop && artifacts.videoReady ? " · 视频已生成，可下载" : ""}
-          </p>
-        ) : null}
-      </div>
+      <CompletedPreview
+        task={task}
+        artifacts={artifacts}
+        canStreamVideo={Boolean(canStreamVideo)}
+      />
     );
   }
 

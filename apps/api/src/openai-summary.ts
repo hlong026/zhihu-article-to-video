@@ -2,33 +2,45 @@ import {
   titleAndTagsJsonSchema,
   type SummaryGenerator,
 } from "@zhihu-video/pipeline";
+import type { AiSettings } from "@zhihu-video/contracts";
 
 export class AiConfigurationError extends Error {}
 
-const defaultAiBaseUrl = "https://api.deepseek.com";
-const defaultAiModel = "deepseek-v4-flash";
+export const defaultAiBaseUrl = "https://api.deepseek.com";
+export const defaultAiModel = "deepseek-v4-flash";
+
+export interface ResolvedAiConfiguration {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+}
 
 export class OpenAiCompatibleSummaryGenerator implements SummaryGenerator {
-  constructor(private readonly configuration = readAiConfiguration()) {}
+  private readonly resolve: () => ResolvedAiConfiguration | null;
+
+  constructor(resolve?: () => ResolvedAiConfiguration | null) {
+    this.resolve = resolve ?? (() => readAiConfiguration());
+  }
 
   async summarize(input: {
     sourceTitle: string;
     paragraphs: string[];
   }): Promise<unknown> {
-    if (!this.configuration)
+    const configuration = this.resolve();
+    if (!configuration)
       throw new AiConfigurationError(
         "未配置 AI_API_KEY、AI_BASE_URL 或 AI_MODEL。",
       );
     const response = await fetch(
-      `${this.configuration.baseUrl}/chat/completions`,
+      `${configuration.baseUrl}/chat/completions`,
       {
         method: "POST",
         headers: {
-          authorization: `Bearer ${this.configuration.apiKey}`,
+          authorization: `Bearer ${configuration.apiKey}`,
           "content-type": "application/json",
         },
         body: JSON.stringify({
-          model: this.configuration.model,
+          model: configuration.model,
           messages: [
             {
               role: "system",
@@ -60,11 +72,7 @@ export class OpenAiCompatibleSummaryGenerator implements SummaryGenerator {
   }
 }
 
-export function readAiConfiguration(environment = process.env): {
-  baseUrl: string;
-  apiKey: string;
-  model: string;
-} | null {
+export function readAiConfiguration(environment = process.env): ResolvedAiConfiguration | null {
   const apiKey = environment.AI_API_KEY?.trim();
   if (!apiKey) return null;
 
@@ -73,5 +81,29 @@ export function readAiConfiguration(environment = process.env): {
       environment.AI_BASE_URL?.trim().replace(/\/$/, "") ?? defaultAiBaseUrl,
     apiKey,
     model: environment.AI_MODEL?.trim() || defaultAiModel,
+  };
+}
+
+/**
+ * Resolves the effective AI configuration by merging DB settings (priority)
+ * with environment variables and built-in defaults.
+ */
+export function resolveAiConfiguration(
+  dbSettings: AiSettings,
+  environment: NodeJS.ProcessEnv = process.env,
+): ResolvedAiConfiguration | null {
+  const apiKey =
+    dbSettings.apiKey?.trim() || environment.AI_API_KEY?.trim() || null;
+  if (!apiKey) return null;
+  return {
+    baseUrl:
+      dbSettings.baseUrl?.trim().replace(/\/$/, "") ||
+      environment.AI_BASE_URL?.trim().replace(/\/$/, "") ||
+      defaultAiBaseUrl,
+    apiKey,
+    model:
+      dbSettings.model?.trim() ||
+      environment.AI_MODEL?.trim() ||
+      defaultAiModel,
   };
 }

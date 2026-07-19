@@ -80,7 +80,7 @@ export function buildFfmpegVideoCommand(
     const fadeStart = Math.max(0, durationSeconds - fadeOut);
     args.push(
       "-filter_complex",
-      `${videoFilter};[${cards.length}:a]volume=${volume},afade=t=out:st=${fadeStart}:d=${fadeOut}[a]`,
+      `${videoFilter};[${cards.length}:a]atrim=0:${durationSeconds},asetpts=PTS-STARTPTS,volume=${volume},afade=t=out:st=${fadeStart}:d=${fadeOut}[a]`,
       "-map",
       "[v]",
       "-map",

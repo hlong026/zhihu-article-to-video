@@ -173,3 +173,27 @@ export const processingConcurrencyOptions = [5, 10, 15, 20] as const;
 export interface ProcessingSettings {
   concurrency: number;
 }
+
+/**
+ * AI model configuration persisted in the local database. When a field is
+ * null the runtime falls back to the corresponding environment variable
+ * (AI_API_KEY / AI_BASE_URL / AI_MODEL) or the built-in default.
+ */
+export interface AiSettings {
+  /** OpenAI-compatible API key. Required for AI summarization. */
+  apiKey: string | null;
+  /** Base URL of the OpenAI-compatible endpoint (no trailing slash). */
+  baseUrl: string | null;
+  /** Model identifier sent in the chat-completions request. */
+  model: string | null;
+}
+
+/** AiSettings plus resolved read-only fields for the settings UI. */
+export interface AiSettingsView extends AiSettings {
+  /** The effective base URL after env/default fallback. */
+  effectiveBaseUrl: string;
+  /** The effective model after env/default fallback. */
+  effectiveModel: string;
+  /** True when an API key is available (from DB or env). */
+  configured: boolean;
+}

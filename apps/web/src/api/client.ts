@@ -1,4 +1,5 @@
 import type {
+  AiSettingsView,
   ArticleTask,
   ArticleTaskDetail,
   BatchDetailView,
@@ -177,6 +178,15 @@ let mockBgm: BgmSettingsView = {
 };
 
 let mockProcessing: ProcessingSettings = { concurrency: 5 };
+
+let mockAiSettings: AiSettingsView = {
+  apiKey: null,
+  baseUrl: null,
+  model: null,
+  effectiveBaseUrl: "https://api.deepseek.com",
+  effectiveModel: "deepseek-v4-flash",
+  configured: false,
+};
 
 function mockDelay<T>(value: T): Promise<T> {
   return new Promise((resolve) => window.setTimeout(() => resolve(value), 180));
@@ -608,8 +618,37 @@ export const apiClient = {
     });
   },
 
+  async getAiSettings(): Promise<AiSettingsView> {
+    if (useMockApi) return mockDelay({ ...mockAiSettings });
+    return request<AiSettingsView>("/api/settings/ai");
+  },
+
+  async updateAiSettings(patch: {
+    apiKey?: string | null;
+    baseUrl?: string | null;
+    model?: string | null;
+  }): Promise<AiSettingsView> {
+    if (useMockApi) {
+      mockAiSettings = {
+        ...mockAiSettings,
+        ...patch,
+        configured: Boolean(patch.apiKey ?? mockAiSettings.apiKey),
+      };
+      return mockDelay({ ...mockAiSettings });
+    }
+    return request<AiSettingsView>("/api/settings/ai", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+  },
+
   getBatchDownloadUrl(batchId: string): string {
     return `${apiBaseUrl}/api/batches/${batchId}/download`;
+  },
+
+  getBatchVideosDownloadUrl(batchId: string): string {
+    return `${apiBaseUrl}/api/batches/${batchId}/download-videos`;
   },
 
   getResultWorkbookUrl(batchId: string): string {

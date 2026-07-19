@@ -54,6 +54,7 @@ declare global {
       downloadVideo(taskId: string): Promise<string | null>;
       downloadImages(taskId: string): Promise<string | null>;
       downloadBatch(batchId: string): Promise<string | null>;
+      downloadBatchVideos(batchId: string): Promise<string | null>;
       downloadResultWorkbook(batchId: string): Promise<string | null>;
       getBgm(): Promise<BgmSettingsView>;
       updateBgm(patch: {

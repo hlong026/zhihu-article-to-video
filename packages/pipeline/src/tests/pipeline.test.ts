@@ -759,10 +759,10 @@ export async function runPipelineTests(): Promise<void> {
   const filterIndex = musicCommand.args.indexOf("-filter_complex");
   equal(
     musicCommand.args[filterIndex + 1]?.includes(
-      "[5:a]volume=0.3,afade=t=out:st=8:d=1[a]",
+      "[5:a]atrim=0:9,asetpts=PTS-STARTPTS,volume=0.3,afade=t=out:st=8:d=1[a]",
     ),
     true,
-    "the audio filter should apply volume and a trailing fade-out",
+    "the audio filter should trim to video length, apply volume and a trailing fade-out",
   );
   equal(
     buildFfmpegVideoCommand(

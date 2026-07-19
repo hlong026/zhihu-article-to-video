@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import type {
+  AiSettings,
   ArticleTask,
   BatchSummary,
   BgmSettings,
@@ -24,6 +25,7 @@ const DEFAULT_TAIL_NOTE = "来知乎搜索🔍{文章口令}可以看到全文";
 
 const BGM_SETTINGS_KEY = "bgm";
 const PROCESSING_SETTINGS_KEY = "processing";
+const AI_SETTINGS_KEY = "ai";
 
 export const DEFAULT_BGM_SETTINGS: BgmSettings = {
   enabled: false,
@@ -36,6 +38,12 @@ export const DEFAULT_BGM_SETTINGS: BgmSettings = {
 
 export const DEFAULT_PROCESSING_SETTINGS: ProcessingSettings = {
   concurrency: 5,
+};
+
+export const DEFAULT_AI_SETTINGS: AiSettings = {
+  apiKey: null,
+  baseUrl: null,
+  model: null,
 };
 
 /**
@@ -612,6 +620,34 @@ export class TaskRepository {
     } catch {
       return { ...DEFAULT_PROCESSING_SETTINGS };
     }
+  }
+
+  getAiSettings(): AiSettings {
+    const row = this.database
+      .prepare("SELECT value FROM app_settings WHERE key = ?")
+      .get(AI_SETTINGS_KEY) as { value: string } | undefined;
+    if (!row) return { ...DEFAULT_AI_SETTINGS };
+    try {
+      const parsed = JSON.parse(row.value) as Partial<AiSettings>;
+      return {
+        apiKey: typeof parsed.apiKey === "string" ? parsed.apiKey : null,
+        baseUrl: typeof parsed.baseUrl === "string" ? parsed.baseUrl : null,
+        model: typeof parsed.model === "string" ? parsed.model : null,
+      };
+    } catch {
+      return { ...DEFAULT_AI_SETTINGS };
+    }
+  }
+
+  saveAiSettings(settings: AiSettings): AiSettings {
+    this.database
+      .prepare(
+        `INSERT INTO app_settings (key, value, updated_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+      )
+      .run(AI_SETTINGS_KEY, JSON.stringify(settings), now());
+    return this.getAiSettings();
   }
 
   saveProcessingSettings(settings: ProcessingSettings): ProcessingSettings {

@@ -77,6 +77,7 @@ export interface DesktopApi {
   downloadVideo(taskId: string): Promise<DownloadedAsset>;
   downloadImages(taskId: string): Promise<DownloadedAsset>;
   downloadBatch(batchId: string): Promise<DownloadedAsset>;
+  downloadBatchVideos(batchId: string): Promise<DownloadedAsset>;
   downloadResultWorkbook(batchId: string): Promise<DownloadedAsset>;
   getBgm(): Promise<BgmSettingsView>;
   updateBgm(patch: BgmPatch): Promise<BgmSettingsView>;
@@ -234,6 +235,11 @@ export async function createDesktopApi(options: {
       downloadAsset(
         app,
         `/api/batches/${encodeURIComponent(batchId)}/download`,
+      ),
+    downloadBatchVideos: (batchId) =>
+      downloadAsset(
+        app,
+        `/api/batches/${encodeURIComponent(batchId)}/download-videos`,
       ),
     downloadResultWorkbook: (batchId) =>
       downloadAsset(

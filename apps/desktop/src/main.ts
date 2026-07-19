@@ -219,6 +219,23 @@ function registerIpcHandlers(): void {
   });
 
   ipcMain.handle(
+    "desktop:download-batch-videos",
+    async (_event, batchId: unknown) => {
+      if (typeof batchId !== "string" || batchId.length === 0) {
+        throw new Error("批次参数无效。");
+      }
+      return saveAssetWithDialog(
+        await requireApi().downloadBatchVideos(batchId),
+        {
+          title: "保存全部视频 ZIP",
+          filterName: "ZIP 压缩包",
+          extensions: ["zip"],
+        },
+      );
+    },
+  );
+
+  ipcMain.handle(
     "desktop:download-result-workbook",
     async (_event, batchId: unknown) => {
       if (typeof batchId !== "string" || batchId.length === 0) {

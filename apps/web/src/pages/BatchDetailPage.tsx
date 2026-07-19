@@ -1,4 +1,4 @@
-import { ArrowLeft, Download, FileSpreadsheet } from "lucide-react";
+import { ArrowLeft, Download, FileSpreadsheet, Video } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import type {
@@ -141,14 +141,16 @@ export function BatchDetailPage() {
     );
   }
 
-  async function handleBatchDownload(asset: "batch" | "workbook") {
+  async function handleBatchDownload(asset: "batch" | "workbook" | "videos") {
     if (!batchId) return;
     if (window.desktop) {
       try {
         const savedPath =
           asset === "batch"
             ? await window.desktop.downloadBatch(batchId)
-            : await window.desktop.downloadResultWorkbook(batchId);
+            : asset === "videos"
+              ? await window.desktop.downloadBatchVideos(batchId)
+              : await window.desktop.downloadResultWorkbook(batchId);
         toast(
           savedPath ? `已保存到：${savedPath}` : "已取消保存。",
           savedPath ? "success" : "info",
@@ -164,7 +166,9 @@ export function BatchDetailPage() {
     const url =
       asset === "batch"
         ? apiClient.getBatchDownloadUrl(batchId)
-        : apiClient.getResultWorkbookUrl(batchId);
+        : asset === "videos"
+          ? apiClient.getBatchVideosDownloadUrl(batchId)
+          : apiClient.getResultWorkbookUrl(batchId);
     window.open(url, "_blank", "noopener,noreferrer");
   }
 
@@ -237,6 +241,14 @@ export function BatchDetailPage() {
           >
             <Download size={16} />
             下载结果表
+          </button>
+          <button
+            type="button"
+            className="button button-primary"
+            onClick={() => void handleBatchDownload("videos")}
+          >
+            <Video size={16} />
+            下载全部视频
           </button>
           <button
             type="button"

@@ -44,6 +44,8 @@ contextBridge.exposeInMainWorld("desktop", {
     ipcRenderer.invoke("desktop:download-images", taskId),
   downloadBatch: (batchId: string): Promise<string | null> =>
     ipcRenderer.invoke("desktop:download-batch", batchId),
+  downloadBatchVideos: (batchId: string): Promise<string | null> =>
+    ipcRenderer.invoke("desktop:download-batch-videos", batchId),
   downloadResultWorkbook: (batchId: string): Promise<string | null> =>
     ipcRenderer.invoke("desktop:download-result-workbook", batchId),
   getBgm: () => ipcRenderer.invoke("desktop:get-bgm"),

@@ -3,6 +3,7 @@ import {
   Import,
   Play,
   Upload,
+  Video,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
@@ -18,7 +19,6 @@ import {
 import { BgmSettingsCard } from "../components/BgmSettingsCard";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { ImportRangeDialog } from "../components/ImportRangeDialog";
-import { ProcessingSettingsCard } from "../components/ProcessingSettingsCard";
 import { TaskTable } from "../components/TaskTable";
 import { useToast } from "../components/Toast";
 import { WorkbenchPreview } from "../components/WorkbenchPreview";
@@ -410,7 +410,6 @@ export function WorkbenchPage() {
       </header>
 
       <BgmSettingsCard onNotice={(msg) => toast(msg, "info")} />
-      <ProcessingSettingsCard onNotice={(msg) => toast(msg, "info")} />
 
       {workbench && selectedTask ? (
         <>
@@ -453,6 +452,44 @@ export function WorkbenchPage() {
               >
                 查看详情
               </Link>
+              <button
+                type="button"
+                className="button button-primary button-sm"
+                onClick={() => {
+                  if (window.desktop) {
+                    window.desktop
+                      .downloadBatchVideos(workbench.batch.id)
+                      .then((savedPath) =>
+                        toast(
+                          savedPath
+                            ? `已保存到：${savedPath}`
+                            : "已取消保存。",
+                          savedPath ? "success" : "info",
+                        ),
+                      )
+                      .catch((error: unknown) =>
+                        toast(
+                          error instanceof Error
+                            ? error.message
+                            : "下载失败。",
+                          "error",
+                        ),
+                      );
+                  } else {
+                    window.open(
+                      apiClient.getBatchVideosDownloadUrl(
+                        workbench.batch.id,
+                      ),
+                      "_blank",
+                      "noopener,noreferrer",
+                    );
+                  }
+                }}
+                disabled={workbench.batch.completedCount === 0}
+              >
+                <Video size={14} />
+                下载全部视频
+              </button>
             </div>
             <div className="metrics-row">
               <MetricCard label="待处理" value={pendingCount} tone="neutral" />

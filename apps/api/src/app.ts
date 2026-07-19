@@ -27,13 +27,14 @@ import {
   taskExportBaseName,
 } from "./batch-export.js";
 import { parseImportWorkbook } from "./importer.js";
-import { OpenAiCompatibleSummaryGenerator } from "./openai-summary.js";
+import { OpenAiCompatibleSummaryGenerator, defaultAiBaseUrl, defaultAiModel, resolveAiConfiguration } from "./openai-summary.js";
 import { resolveBrowserLaunch } from "./browser-resolver.js";
 import {
   DEFAULT_BGM_SETTINGS,
   TaskRepository,
   type TaskDownloadInfo,
 } from "./repository.js";
+import type { AiSettingsView } from "@zhihu-video/contracts";
 import { TaskStateError } from "./task-state.js";
 import { TaskWorker, type RerenderTailResult } from "./task-worker.js";
 import {
@@ -187,7 +188,9 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
     (contentReader && options.outputDirectory
       ? new TaskWorker(repository, {
           reader: contentReader,
-          generator: new OpenAiCompatibleSummaryGenerator(),
+          generator: new OpenAiCompatibleSummaryGenerator(() =>
+            resolveAiConfiguration(repository.getAiSettings()),
+          ),
           outputDirectory: options.outputDirectory,
           resolveAudio: () =>
             resolveAudioOptions(
@@ -390,6 +393,56 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
         "content-disposition",
         contentDisposition(
           `${batchExportBaseName(batch.sourceFileName)}-成品.zip`,
+        ),
+      );
+      reply.send(archive);
+      void archive.finalize();
+      return reply;
+    },
+  );
+
+  // Downloads only the video files of all completed tasks in a batch.
+  app.get<{ Params: { id: string } }>(
+    "/api/batches/:id/download-videos",
+    async (request, reply) => {
+      const batch = repository.getBatch(request.params.id);
+      if (!batch) {
+        return reply
+          .status(404)
+          .send({ error: "BATCH_NOT_FOUND", message: "批次不存在" });
+      }
+      const tasks = repository.listBatchTaskExports(request.params.id);
+      const exportable = tasks
+        .map((task, index) => ({ task, index }))
+        .filter(
+          ({ task }) => task.status === "completed" && task.outputDirectory,
+        )
+        .filter(({ task }) =>
+          isInsideOutputRoot(task.outputDirectory!, options.outputDirectory),
+        );
+      if (exportable.length === 0) {
+        return reply.status(409).send({
+          error: "BATCH_NOT_COMPLETED",
+          message: "批次内暂无已完成任务，无法下载视频。",
+        });
+      }
+      const archive = new ZipArchive({ zlib: { level: 9 } });
+      archive.on("error", (error) =>
+        app.log.error(error, "批次视频 ZIP 打包失败"),
+      );
+      for (const { task, index } of exportable) {
+        const baseName = taskExportBaseName(task, index);
+        const outputDirectory = resolve(task.outputDirectory!);
+        const videoPath = join(outputDirectory, "video.mp4");
+        if (existsSync(videoPath)) {
+          archive.file(videoPath, { name: `${baseName}.mp4` });
+        }
+      }
+      reply.header("content-type", "application/zip");
+      reply.header(
+        "content-disposition",
+        contentDisposition(
+          `${batchExportBaseName(batch.sourceFileName)}-全部视频.zip`,
         ),
       );
       reply.send(archive);
@@ -812,6 +865,45 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
   app.put("/api/settings/processing", async (request) => {
     const input = processingUpdateSchema.parse(request.body);
     return repository.saveProcessingSettings(input);
+  });
+
+  app.get("/api/settings/ai", async (): Promise<AiSettingsView> => {
+    const settings = repository.getAiSettings();
+    const resolved = resolveAiConfiguration(settings);
+    return {
+      ...settings,
+      effectiveBaseUrl: resolved?.baseUrl ?? defaultAiBaseUrl,
+      effectiveModel: resolved?.model ?? defaultAiModel,
+      configured: resolved !== null,
+    };
+  });
+
+  const aiUpdateSchema = z
+    .object({
+      apiKey: z.string().max(500).nullish(),
+      baseUrl: z.string().max(300).nullish(),
+      model: z.string().max(100).nullish(),
+    })
+    .strict();
+
+  app.put("/api/settings/ai", async (request): Promise<AiSettingsView> => {
+    const input = aiUpdateSchema.parse(request.body);
+    const current = repository.getAiSettings();
+    const trimOrNull = (v: string | null | undefined, fallback: string | null) =>
+      v === undefined ? fallback : (v ?? "").trim() || null;
+    const next = {
+      apiKey: trimOrNull(input.apiKey, current.apiKey),
+      baseUrl: trimOrNull(input.baseUrl, current.baseUrl),
+      model: trimOrNull(input.model, current.model),
+    };
+    const saved = repository.saveAiSettings(next);
+    const resolved = resolveAiConfiguration(saved);
+    return {
+      ...saved,
+      effectiveBaseUrl: resolved?.baseUrl ?? defaultAiBaseUrl,
+      effectiveModel: resolved?.model ?? defaultAiModel,
+      configured: resolved !== null,
+    };
   });
 
   app.delete("/api/settings/bgm", async () => {
