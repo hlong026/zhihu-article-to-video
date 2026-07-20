@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { chromium, type BrowserContext, type Page } from "playwright-core";
@@ -391,12 +391,36 @@ function hasPageMeta(meta: PageMetaSnapshot): boolean {
   return Boolean(meta.authorName ?? meta.answerCount ?? meta.followCount);
 }
 
+/**
+ * Chrome leaves lock / crash-recovery artifacts in the profile directory
+ * after an unclean exit. On Windows a crashed browser can leave these stale
+ * files behind, causing every subsequent launch to exit immediately
+ * ("Target page, context or browser has been closed" crash loop). Removing
+ * them before a retry breaks the loop.
+ */
+const STALE_PROFILE_ARTIFACTS = [
+  "SingletonLock",
+  "SingletonCookie",
+  "SingletonSocket",
+  "lockfile",
+];
+
+/**
+ * Recycle the persistent browser context after this many successful reads.
+ * Chrome's memory footprint grows with every navigation even when pages are
+ * closed; restarting every N reads keeps long batches (40+ tasks) stable on
+ * machines with 8 GB RAM or less.
+ */
+const CONTEXT_RECYCLE_AFTER_READS = 20;
+
 export class PlaywrightZhihuContentReader implements ZhihuContentReader {
   private contextPromise: Promise<BrowserContext> | null = null;
   /** Serializes reads: one profile, one page load at a time. */
   private queue: Promise<void> = Promise.resolve();
   private lastRequestAt = 0;
   private headlessActive: boolean;
+  /** Successful reads since the last context (re)launch, for recycling. */
+  private readsSinceLaunch = 0;
   private readonly minIntervalMs: number;
   private readonly navigationTimeoutMs: number;
   private readonly interactiveWaitMs: number;
@@ -467,7 +491,28 @@ export class PlaywrightZhihuContentReader implements ZhihuContentReader {
     }
 
     await this.throttle();
-    const page = await context.newPage();
+    let page: Awaited<ReturnType<BrowserContext["newPage"]>>;
+    try {
+      page = await context.newPage();
+    } catch {
+      // The cached context is dead (browser process crashed or was killed).
+      // Discard it and retry once with a fresh launch so a single crash does
+      // not poison every remaining task in the batch.
+      await this.closeContext();
+      try {
+        context = await this.ensureContext();
+        page = await context.newPage();
+      } catch (relaunchError) {
+        const detail =
+          relaunchError instanceof Error
+            ? relaunchError.message
+            : String(relaunchError);
+        return failure(
+          "NETWORK_ERROR",
+          `浏览器进程异常退出后重启失败（${detail}）。请关闭占用内存的程序后重试。`,
+        );
+      }
+    }
     try {
       const response = await page.goto(source.canonicalUrl, {
         waitUntil: "domcontentloaded",
@@ -525,6 +570,16 @@ export class PlaywrightZhihuContentReader implements ZhihuContentReader {
           result.content,
         );
         if (snapshotPath) result.snapshotPath = snapshotPath;
+      }
+      if (result.ok) {
+        this.readsSinceLaunch += 1;
+        // Proactively recycle the browser after many reads: long-lived
+        // Chrome processes accumulate memory (renderer heaps, GPU buffers)
+        // and eventually get OOM-killed on consumer machines. Restarting
+        // between reads is cheap (~1s) compared to a mid-batch crash.
+        if (this.readsSinceLaunch >= CONTEXT_RECYCLE_AFTER_READS) {
+          await this.closeContext();
+        }
       }
       return result;
     } catch (error) {
@@ -620,13 +675,54 @@ export class PlaywrightZhihuContentReader implements ZhihuContentReader {
 
   private ensureContext(): Promise<BrowserContext> {
     if (!this.contextPromise) {
-      this.contextPromise = this.launchContext(this.headlessActive);
+      this.contextPromise = this.launchContextWithRetry(this.headlessActive);
       // A failed launch must not poison later retries.
       this.contextPromise.catch(() => {
         this.contextPromise = null;
       });
     }
     return this.contextPromise;
+  }
+
+  /**
+   * Launch with up to 3 attempts. Between attempts, stale profile lock files
+   * left behind by a crashed browser are removed so the next launch starts
+   * from a clean state instead of entering a crash-recovery loop.
+   */
+  private async launchContextWithRetry(
+    headless: boolean,
+  ): Promise<BrowserContext> {
+    const maxAttempts = 3;
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const context = await this.launchContext(headless);
+        this.readsSinceLaunch = 0;
+        return context;
+      } catch (error) {
+        lastError = error;
+        if (attempt < maxAttempts) {
+          await this.cleanStaleProfileArtifacts();
+          // Give the OS a moment to release file handles of the dead process.
+          await new Promise((resolve) =>
+            setTimeout(resolve, attempt * 1_500),
+          );
+        }
+      }
+    }
+    throw lastError;
+  }
+
+  private async cleanStaleProfileArtifacts(): Promise<void> {
+    try {
+      await Promise.all(
+        STALE_PROFILE_ARTIFACTS.map((name) =>
+          rm(join(this.options.sessionDirectory, name), { force: true }),
+        ),
+      );
+    } catch {
+      // Best-effort: a cleanup failure must not block the retry itself.
+    }
   }
 
   private launchContext(headless: boolean): Promise<BrowserContext> {
@@ -642,7 +738,19 @@ export class PlaywrightZhihuContentReader implements ZhihuContentReader {
       viewport: { width: 1280, height: 900 },
       locale: "zh-CN",
       timezoneId: "Asia/Shanghai",
-      args: ["--disable-blink-features=AutomationControlled"],
+      args: [
+        "--disable-blink-features=AutomationControlled",
+        // Stability hardening: skip first-run dialogs, suppress the
+        // "Chrome did not shut down correctly" crash bubble (which causes an
+        // immediate exit in automated profiles), and reduce shared-memory
+        // pressure that can OOM-kill the browser on low-RAM machines.
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-session-crashed-bubble",
+        "--disable-infobars",
+        "--disable-dev-shm-usage",
+        "--disable-background-timer-throttling",
+      ],
     });
   }
 
