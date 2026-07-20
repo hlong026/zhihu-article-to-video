@@ -87,6 +87,11 @@ export function classifyZhihuUrl(
   } catch {
     return null;
   }
+  // Users frequently paste http:// links from older share dialogs or mobile
+  // copies. Zhihu is https-only, so upgrade instead of rejecting the row.
+  if (url.protocol === "http:") {
+    url.protocol = "https:";
+  }
   const canonicalUrl = `${url.origin}${url.pathname.replace(/\/$/, "")}`;
   const match = supportedUrlPatterns.find(({ pattern }) =>
     pattern.test(canonicalUrl),

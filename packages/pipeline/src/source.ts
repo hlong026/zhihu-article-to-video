@@ -84,6 +84,11 @@ export function classifyZhihuUrl(rawUrl: string): UrlClassification {
     return { sourceType: null, canonicalUrl: null };
   }
 
+  // Accept http:// by upgrading to https (kept in sync with the importer's
+  // classifyZhihuUrl): users often paste non-https links from share dialogs.
+  if (url.protocol === "http:") {
+    url.protocol = "https:";
+  }
   if (url.protocol !== "https:") {
     return { sourceType: null, canonicalUrl: null };
   }
