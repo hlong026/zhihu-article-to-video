@@ -28,14 +28,24 @@ function clampVolume(volume: number | undefined): number {
   return Math.min(1, Math.max(0, volume));
 }
 
-export function durationForCard(kind: CardKind): 1 | 2 {
-  return kind === "cover" ? 1 : 2;
+export function durationForCard(
+  kind: CardKind,
+  bodyPageDurationSeconds?: number,
+): number {
+  if (kind === "cover") return 1;
+  if (kind === "tail") return 2;
+  const custom = bodyPageDurationSeconds ?? 2;
+  return Number.isFinite(custom) && custom > 0 ? custom : 2;
 }
 
 export function totalVideoDuration(
   cards: readonly Pick<CardRenderModel, "kind">[],
+  bodyPageDurationSeconds?: number,
 ): number {
-  return cards.reduce((total, card) => total + durationForCard(card.kind), 0);
+  return cards.reduce(
+    (total, card) => total + durationForCard(card.kind, bodyPageDurationSeconds),
+    0,
+  );
 }
 
 export function buildFfmpegVideoCommand(
@@ -43,6 +53,7 @@ export function buildFfmpegVideoCommand(
   imagePaths: readonly string[],
   outputPath: string,
   audio?: FfmpegAudioOptions,
+  bodyPageDurationSeconds?: number,
 ): FfmpegCommand {
   if (cards.length === 0 || cards.length !== imagePaths.length) {
     throw new Error("卡片和图片数量必须一致且不能为空。");
@@ -51,14 +62,14 @@ export function buildFfmpegVideoCommand(
     throw new Error("视频必须以封面开始并以尾页结束。");
   }
 
-  const durationSeconds = totalVideoDuration(cards);
+  const durationSeconds = totalVideoDuration(cards, bodyPageDurationSeconds);
   const args = ["-y"];
   cards.forEach((card, index) => {
     args.push(
       "-loop",
       "1",
       "-t",
-      String(durationForCard(card.kind)),
+      String(durationForCard(card.kind, bodyPageDurationSeconds)),
       "-i",
       imagePaths[index]!,
     );

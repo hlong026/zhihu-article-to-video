@@ -29,6 +29,11 @@ export interface VideoPreparationInput {
   manualContent?: RawReadableContent | null;
   /** Directory where the reader may persist the raw page snapshot. */
   snapshotDir?: string;
+  /**
+   * Full-content output mode: lifts the 10-page pagination cap so the whole
+   * article is rendered between the cover and the tail page.
+   */
+  fullContentOutput?: boolean;
 }
 
 export interface VideoPreparationDependencies {
@@ -101,7 +106,10 @@ export async function buildPreparedVideo(
   // Body pages come straight from the article text; the AI only produces
   // the video title and tags. AI failures fall back to the source title so
   // a flaky model never blocks an otherwise renderable task.
-  const { pages, truncated } = paginateParagraphs(content.paragraphs);
+  const { pages, truncated } = paginateParagraphs(
+    content.paragraphs,
+    input.fullContentOutput ? { maxPages: Number.POSITIVE_INFINITY } : {},
+  );
   const riskFlags: string[] = [];
   let videoTitle: string;
   let tags: string[];
@@ -138,6 +146,7 @@ export async function buildPreparedVideo(
   };
   const validation = validateVideoSummary(summary, {
     hasVerifiedKeyword: Boolean(input.articleKeyword?.trim()),
+    allowUnlimitedPages: input.fullContentOutput,
   });
   if (validation.status === "needs_review") {
     return { kind: "needs_review", issues: validation.issues };

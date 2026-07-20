@@ -101,7 +101,15 @@ const processingUpdateSchema = z
       .int()
       .refine((value) => [5, 10, 15, 20].includes(value), {
         message: "并发数仅支持 5 / 10 / 15 / 20",
-      }),
+      })
+      .optional(),
+    bodyPageDurationSeconds: z
+      .number()
+      .refine((value) => [1, 1.5, 2, 2.5, 3].includes(value), {
+        message: "正文页时长仅支持 1 / 1.5 / 2 / 2.5 / 3 秒",
+      })
+      .optional(),
+    fullContentOutput: z.boolean().optional(),
   })
   .strict();
 
@@ -214,6 +222,13 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
               return Math.min(20, override);
             }
             return repository.getProcessingSettings().concurrency;
+          },
+          resolveVideoSettings: () => {
+            const settings = repository.getProcessingSettings();
+            return {
+              bodyPageDurationSeconds: settings.bodyPageDurationSeconds,
+              fullContentOutput: settings.fullContentOutput,
+            };
           },
         })
       : null);
@@ -873,7 +888,13 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
 
   app.put("/api/settings/processing", async (request) => {
     const input = processingUpdateSchema.parse(request.body);
-    return repository.saveProcessingSettings(input);
+    const current = repository.getProcessingSettings();
+    return repository.saveProcessingSettings({
+      concurrency: input.concurrency ?? current.concurrency,
+      bodyPageDurationSeconds:
+        input.bodyPageDurationSeconds ?? current.bodyPageDurationSeconds,
+      fullContentOutput: input.fullContentOutput ?? current.fullContentOutput,
+    });
   });
 
   app.get("/api/settings/ai", async (): Promise<AiSettingsView> => {
@@ -935,7 +956,7 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
 /**
  * Computes the artifact summary shown in detail panels: rendered card count,
  * whether the video exists, and the total duration implied by the card mix
- * (1s cover + 2s per body page + 2s tail, matching pipeline durationForCard).
+ * (1s cover + configured body dwell + 2s tail, matching pipeline durationForCard).
  */
 async function loadTaskArtifacts(
   taskId: string,
@@ -954,7 +975,10 @@ async function loadTaskArtifacts(
   ).length;
   const videoReady = existsSync(join(outputDirectory, "video.mp4"));
   if (imageCount === 0 && !videoReady) return null;
-  const durationSeconds = imageCount >= 2 ? imageCount * 2 - 1 : 0;
+  const bodyDuration = repository.getProcessingSettings().bodyPageDurationSeconds;
+  // cover (1s) + body pages + tail (2s)
+  const durationSeconds =
+    imageCount >= 2 ? 1 + (imageCount - 2) * bodyDuration + 2 : 0;
   return { imageCount, videoReady, durationSeconds };
 }
 

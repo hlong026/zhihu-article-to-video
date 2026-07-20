@@ -86,7 +86,7 @@ export interface DesktopApi {
   previewBgm(): Promise<BgmPreviewAsset>;
   clearBgm(): Promise<BgmSettingsView>;
   getProcessing(): Promise<ProcessingSettings>;
-  updateProcessing(patch: ProcessingSettings): Promise<ProcessingSettings>;
+  updateProcessing(patch: Partial<ProcessingSettings>): Promise<ProcessingSettings>;
   close(): Promise<void>;
 }
 

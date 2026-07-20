@@ -17,6 +17,8 @@ export interface RenderVideoInput {
   keyword: string;
   /** Optional background-music track mixed under the slideshow. */
   audio?: FfmpegAudioOptions;
+  /** Seconds each body page stays on screen (cover 1s / tail 2s fixed). */
+  bodyPageDurationSeconds?: number;
   /** Reports per-card progress (done, total) while PNGs are rasterized. */
   onImageProgress?: (done: number, total: number) => void;
   /** Fires once every card is rendered and video encoding begins. */
@@ -64,6 +66,7 @@ export async function renderVideoAssets(
     cards.map(({ outputPath }) => outputPath),
     videoPath,
     input.audio,
+    input.bodyPageDurationSeconds,
   );
   input.onVideoEncodingStart?.();
   await (dependencies.executeFfmpeg ?? executeFfmpeg)(command, input.ffmpegExecutable);

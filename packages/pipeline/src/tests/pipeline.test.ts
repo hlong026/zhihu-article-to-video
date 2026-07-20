@@ -5,6 +5,7 @@ import {
   cleanReadableContent,
   classifyZhihuUrl,
   countBodyCharacters,
+  durationForCard,
   totalVideoDuration,
   escapeSvgText,
   measureBodyLayout,
@@ -1011,6 +1012,174 @@ export async function runPipelineTests(): Promise<void> {
       aiFailureVideo.summary.riskFlags,
       ["AI_TITLE_FALLBACK"],
       "the fallback should be recorded as a risk flag",
+    );
+  }
+
+  // ── Custom body-page dwell time ─────────────────────────────────────
+  equal(
+    durationForCard("cover", 3),
+    1,
+    "the cover must always stay at one second",
+  );
+  equal(
+    durationForCard("tail", 3),
+    2,
+    "the tail must always stay at two seconds",
+  );
+  equal(
+    durationForCard("body", 1.5),
+    1.5,
+    "body pages should honour the configured dwell time",
+  );
+  equal(
+    durationForCard("body", -1),
+    2,
+    "non-positive durations should fall back to two seconds",
+  );
+  equal(
+    durationForCard("body", Number.NaN),
+    2,
+    "non-finite durations should fall back to two seconds",
+  );
+  equal(
+    totalVideoDuration(cards, 1.5),
+    7.5,
+    "a 1.5s body dwell time should yield cover 1 + 3×1.5 + tail 2",
+  );
+  equal(
+    totalVideoDuration(cards, 3),
+    12,
+    "a 3s body dwell time should yield cover 1 + 3×3 + tail 2",
+  );
+
+  const customDurationCommand = buildFfmpegVideoCommand(
+    cards,
+    ["cover.png", "01.png", "02.png", "03.png", "tail.png"],
+    "video.mp4",
+    undefined,
+    1.5,
+  );
+  equal(
+    customDurationCommand.durationSeconds,
+    7.5,
+    "the FFmpeg command should honour the custom body dwell time",
+  );
+  const dwellTimes: string[] = [];
+  customDurationCommand.args.forEach((argument, index) => {
+    if (argument === "-t") {
+      dwellTimes.push(customDurationCommand.args[index + 1]!);
+    }
+  });
+  deepEqual(
+    dwellTimes,
+    ["1", "1.5", "1.5", "1.5", "2"],
+    "per-image dwell times should be cover 1s, body 1.5s each, tail 2s",
+  );
+
+  // ── Full-content output mode ────────────────────────────────────────
+  const unlimitedPages = validateVideoSummary(
+    {
+      ...validSummary,
+      pages: Array.from({ length: 11 }, (_, index) => ({
+        body: `第${index + 1}页正文内容，全文输出模式取消了十页上限，每一页都需要超过三十八个字符才能通过校验，因此多写一些。`,
+        sourceRefs: [index + 1],
+      })),
+    },
+    { hasVerifiedKeyword: true, allowUnlimitedPages: true },
+  );
+  equal(
+    unlimitedPages.status,
+    "ready",
+    "allowUnlimitedPages should lift the ten-page cap",
+  );
+
+  const longArticleParagraphs = Array.from(
+    { length: 36 },
+    (_, index) =>
+      `第${index + 1}段：${"全文输出模式要求分页器完整保留每一段正文内容，不允许截断。".repeat(3)}`,
+  );
+  const longArticleReader = {
+    read: async () =>
+      ({
+        ok: true,
+        content: {
+          title: "长文章标题",
+          paragraphs: longArticleParagraphs,
+        },
+      }) as const,
+  };
+  const longArticleGenerator = {
+    summarize: async () => ({
+      videoTitle: "长文章的完整输出",
+      tags: ["全文", "测试"],
+    }),
+  };
+
+  const cappedVideo = await buildPreparedVideo(
+    {
+      sourceUrl: "https://zhuanlan.zhihu.com/p/999",
+      sourceType: "article",
+      articleKeyword: "全文口令",
+    },
+    { reader: longArticleReader, generator: longArticleGenerator },
+  );
+  equal(
+    cappedVideo.kind,
+    "ready",
+    "a long article should still be ready in default mode",
+  );
+  if (cappedVideo.kind === "ready") {
+    equal(
+      cappedVideo.summary.pages.length,
+      10,
+      "default mode should cap the body at ten pages",
+    );
+    equal(
+      cappedVideo.summary.truncated,
+      true,
+      "default mode should flag the overflow as truncated",
+    );
+  }
+
+  const fullContentVideo = await buildPreparedVideo(
+    {
+      sourceUrl: "https://zhuanlan.zhihu.com/p/999",
+      sourceType: "article",
+      articleKeyword: "全文口令",
+      fullContentOutput: true,
+    },
+    { reader: longArticleReader, generator: longArticleGenerator },
+  );
+  equal(
+    fullContentVideo.kind,
+    "ready",
+    "full-content mode should lift the page cap instead of entering review",
+  );
+  if (fullContentVideo.kind === "ready") {
+    equal(
+      fullContentVideo.summary.pages.length > 10,
+      true,
+      "full-content mode should keep every paginated body page",
+    );
+    equal(
+      fullContentVideo.summary.truncated,
+      false,
+      "full-content mode should never mark the article as truncated",
+    );
+    equal(
+      fullContentVideo.cards.length,
+      fullContentVideo.summary.pages.length + 2,
+      "the card sequence should be cover + every body page + tail",
+    );
+    equal(
+      fullContentVideo.cards[0]?.kind,
+      "cover",
+      "the full-content video should still open with the cover",
+    );
+    equal(
+      fullContentVideo.cards.at(-1)?.kind,
+      "tail",
+      "the full-content video should still end with the tail",
     );
   }
 }

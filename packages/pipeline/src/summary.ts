@@ -30,6 +30,11 @@ export interface VideoSummary {
 
 export interface SummaryValidationOptions {
   hasVerifiedKeyword: boolean;
+  /**
+   * Full-content output mode: the page cap is lifted so long articles render
+   * in their entirety instead of entering needs_review for TOO_MANY_PAGES.
+   */
+  allowUnlimitedPages?: boolean;
 }
 
 export type SummaryIssueCode =
@@ -154,7 +159,7 @@ export function validateVideoSummary(
       message: "正文至少需要 1 页内容。",
     });
   }
-  if (value.pages.length > bodyPageMaxCount) {
+  if (value.pages.length > bodyPageMaxCount && !options.allowUnlimitedPages) {
     issues.push({
       code: "TOO_MANY_PAGES",
       message: "正文超过 10 页，需要截取前 10 页。",

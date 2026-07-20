@@ -76,7 +76,9 @@ declare global {
       clearBgm(): Promise<BgmSettingsView>;
       getProcessing(): Promise<ProcessingSettings>;
       updateProcessing(patch: {
-        concurrency: number;
+        concurrency?: number;
+        bodyPageDurationSeconds?: number;
+        fullContentOutput?: boolean;
       }): Promise<ProcessingSettings>;
     };
   }

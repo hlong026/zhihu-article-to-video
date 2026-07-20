@@ -10,7 +10,7 @@ import type {
   SourceType,
   TaskStatus,
 } from "@zhihu-video/contracts";
-import { processingConcurrencyOptions } from "@zhihu-video/contracts";
+import { processingConcurrencyOptions, bodyPageDurationOptions } from "@zhihu-video/contracts";
 
 import type { SqliteDatabase } from "./database.js";
 import type { ImportRowError, ImportTaskInput } from "./importer.js";
@@ -38,6 +38,8 @@ export const DEFAULT_BGM_SETTINGS: BgmSettings = {
 
 export const DEFAULT_PROCESSING_SETTINGS: ProcessingSettings = {
   concurrency: 5,
+  bodyPageDurationSeconds: 2,
+  fullContentOutput: false,
 };
 
 export const DEFAULT_AI_SETTINGS: AiSettings = {
@@ -603,7 +605,8 @@ export class TaskRepository {
 
   /**
    * Reads the single global batch-processing configuration. Only the preset
-   * concurrency values are accepted; anything else falls back to the default.
+   * concurrency / duration values are accepted; anything else falls back to
+   * the default.
    */
   getProcessingSettings(): ProcessingSettings {
     const row = this.database
@@ -617,7 +620,16 @@ export class TaskRepository {
       )
         ? Number(parsed.concurrency)
         : DEFAULT_PROCESSING_SETTINGS.concurrency;
-      return { concurrency };
+      const bodyPageDurationSeconds = (
+        bodyPageDurationOptions as readonly number[]
+      ).includes(Number(parsed.bodyPageDurationSeconds))
+        ? Number(parsed.bodyPageDurationSeconds)
+        : DEFAULT_PROCESSING_SETTINGS.bodyPageDurationSeconds;
+      const fullContentOutput =
+        typeof parsed.fullContentOutput === "boolean"
+          ? parsed.fullContentOutput
+          : DEFAULT_PROCESSING_SETTINGS.fullContentOutput;
+      return { concurrency, bodyPageDurationSeconds, fullContentOutput };
     } catch {
       return { ...DEFAULT_PROCESSING_SETTINGS };
     }
@@ -658,6 +670,13 @@ export class TaskRepository {
       )
     ) {
       throw new Error("并发数仅支持 5 / 10 / 15 / 20。");
+    }
+    if (
+      !(bodyPageDurationOptions as readonly number[]).includes(
+        settings.bodyPageDurationSeconds,
+      )
+    ) {
+      throw new Error("正文页时长仅支持 1 / 1.5 / 2 / 2.5 / 3 秒。");
     }
     this.database
       .prepare(

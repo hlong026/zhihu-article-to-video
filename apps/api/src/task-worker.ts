@@ -34,6 +34,14 @@ export class TaskWorker {
        * serial internally, so concurrency only widens AI calls and rendering.
        */
       resolveConcurrency?: () => number;
+      /**
+       * Resolves the operator's video output preferences (body-page dwell
+       * time and full-content mode) at render time.
+       */
+      resolveVideoSettings?: () => {
+        bodyPageDurationSeconds: number;
+        fullContentOutput: boolean;
+      };
       /** Resolved FFmpeg executable path (bundled or system). */
       ffmpegExecutable?: string;
     },
@@ -64,6 +72,10 @@ export class TaskWorker {
     const task = this.repository.getTask(taskId);
     if (!task) return;
     const outputDirectory = join(this.dependencies.outputDirectory, taskId);
+    const videoSettings = this.dependencies.resolveVideoSettings?.() ?? {
+      bodyPageDurationSeconds: 2,
+      fullContentOutput: false,
+    };
     try {
       this.repository.reportTaskProgress(taskId, 5, "开始读取文章内容");
       const prepared = await buildPreparedVideo(
@@ -73,6 +85,7 @@ export class TaskWorker {
           articleKeyword: task.articleKeyword,
           manualContent: task.manualContent,
           snapshotDir: outputDirectory,
+          fullContentOutput: videoSettings.fullContentOutput,
         },
         this.dependencies,
       );
@@ -112,6 +125,7 @@ export class TaskWorker {
         // A "ready" result implies the keyword was verified by the pipeline.
         keyword: task.articleKeyword!,
         audio: this.dependencies.resolveAudio?.() ?? undefined,
+        bodyPageDurationSeconds: videoSettings.bodyPageDurationSeconds,
         ffmpegExecutable: this.dependencies.ffmpegExecutable,
         tailTemplate: task.tailNoteTemplate,
         onImageProgress: (done, total) =>
@@ -178,6 +192,10 @@ export class TaskWorker {
       };
     }
     const outputDirectory = join(this.dependencies.outputDirectory, taskId);
+    const videoSettings = this.dependencies.resolveVideoSettings?.() ?? {
+      bodyPageDurationSeconds: 2,
+      fullContentOutput: false,
+    };
     const content: {
       title: string;
       paragraphs: string[];
@@ -190,7 +208,12 @@ export class TaskWorker {
         message: "缺少文章快照，无法单独重渲尾页，请使用重试重新抓取。",
       };
     }
-    const { pages, truncated } = paginateParagraphs(content.paragraphs);
+    const { pages, truncated } = paginateParagraphs(
+      content.paragraphs,
+      videoSettings.fullContentOutput
+        ? { maxPages: Number.POSITIVE_INFINITY }
+        : {},
+    );
     const summary: VideoSummary = {
       sourceTitle: content.title,
       videoTitle: task.finalTitle ?? truncateVideoTitle(content.title),
@@ -204,6 +227,7 @@ export class TaskWorker {
     };
     const validation = validateVideoSummary(summary, {
       hasVerifiedKeyword: true,
+      allowUnlimitedPages: videoSettings.fullContentOutput,
     });
     if (validation.status === "needs_review") {
       return {
@@ -221,6 +245,7 @@ export class TaskWorker {
         summary,
         keyword,
         audio: this.dependencies.resolveAudio?.() ?? undefined,
+        bodyPageDurationSeconds: videoSettings.bodyPageDurationSeconds,
         ffmpegExecutable: this.dependencies.ffmpegExecutable,
         tailTemplate: task.tailNoteTemplate,
         onImageProgress: (done, total) =>

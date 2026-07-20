@@ -289,16 +289,8 @@ function registerIpcHandlers(): void {
   );
 
   ipcMain.handle("desktop:update-processing", async (_event, patch: unknown) => {
-    if (
-      typeof patch !== "object" ||
-      patch === null ||
-      typeof (patch as { concurrency?: unknown }).concurrency !== "number"
-    ) {
-      throw new Error("并发设置参数无效。");
-    }
-    return requireApi().updateProcessing(
-      patch as { concurrency: number },
-    );
+    if (!isProcessingPatch(patch)) throw new Error("处理设置参数无效。");
+    return requireApi().updateProcessing(patch);
   });
 }
 
@@ -363,6 +355,23 @@ function isManualContentUpdate(
     typeof value.taskId === "string" &&
     typeof value.title === "string" &&
     typeof value.content === "string"
+  );
+}
+
+function isProcessingPatch(value: unknown): value is {
+  concurrency?: number;
+  bodyPageDurationSeconds?: number;
+  fullContentOutput?: boolean;
+} {
+  if (typeof value !== "object" || value === null) return false;
+  const patch = value as Record<string, unknown>;
+  return (
+    (patch.concurrency === undefined ||
+      typeof patch.concurrency === "number") &&
+    (patch.bodyPageDurationSeconds === undefined ||
+      typeof patch.bodyPageDurationSeconds === "number") &&
+    (patch.fullContentOutput === undefined ||
+      typeof patch.fullContentOutput === "boolean")
   );
 }
 

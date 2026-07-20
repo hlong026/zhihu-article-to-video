@@ -65,7 +65,7 @@ export interface TaskAttemptLog {
 export interface TaskArtifactsSummary {
   imageCount: number;
   videoReady: boolean;
-  /** Cover 1s + body pages 2s each + tail 2s, matching durationForCard. */
+  /** Cover 1s + body pages at the configured dwell time + tail 2s. */
   durationSeconds: number;
 }
 
@@ -167,6 +167,9 @@ export interface BgmSettingsView extends BgmSettings {
 /** Concurrency presets offered in the workbench processing card. */
 export const processingConcurrencyOptions = [5, 10, 15, 20] as const;
 
+/** Body-page dwell-time presets (seconds) offered in the workbench card. */
+export const bodyPageDurationOptions = [1, 1.5, 2, 2.5, 3] as const;
+
 /**
  * Global batch-processing configuration (single operator, one row). The
  * Zhihu reader always stays serial to respect rate limits; concurrency only
@@ -174,6 +177,10 @@ export const processingConcurrencyOptions = [5, 10, 15, 20] as const;
  */
 export interface ProcessingSettings {
   concurrency: number;
+  /** Seconds each body page stays on screen (cover 1s / tail 2s are fixed). */
+  bodyPageDurationSeconds: number;
+  /** When true, body pagination is uncapped: the full article is rendered. */
+  fullContentOutput: boolean;
 }
 
 /**

@@ -105,17 +105,40 @@ describe("processing settings", () => {
 
   it("persists an allowed preset and reads it back", () => {
     const repository = createRepository();
-    expect(repository.saveProcessingSettings({ concurrency: 15 })).toEqual({
+    expect(
+      repository.saveProcessingSettings({
+        concurrency: 15,
+        bodyPageDurationSeconds: 2.5,
+        fullContentOutput: true,
+      }),
+    ).toEqual({
       concurrency: 15,
+      bodyPageDurationSeconds: 2.5,
+      fullContentOutput: true,
     });
-    expect(repository.getProcessingSettings()).toEqual({ concurrency: 15 });
+    expect(repository.getProcessingSettings()).toEqual({
+      concurrency: 15,
+      bodyPageDurationSeconds: 2.5,
+      fullContentOutput: true,
+    });
   });
 
   it("rejects values outside the preset list", () => {
     const repository = createRepository();
-    expect(() => repository.saveProcessingSettings({ concurrency: 7 })).toThrow(
-      "并发数仅支持 5 / 10 / 15 / 20",
-    );
+    expect(() =>
+      repository.saveProcessingSettings({
+        concurrency: 7,
+        bodyPageDurationSeconds: 2,
+        fullContentOutput: false,
+      }),
+    ).toThrow("并发数仅支持 5 / 10 / 15 / 20");
+    expect(() =>
+      repository.saveProcessingSettings({
+        concurrency: 5,
+        bodyPageDurationSeconds: 4,
+        fullContentOutput: false,
+      }),
+    ).toThrow("正文页时长仅支持 1 / 1.5 / 2 / 2.5 / 3 秒");
     expect(repository.getProcessingSettings().concurrency).toBe(5);
   });
 

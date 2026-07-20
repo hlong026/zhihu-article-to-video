@@ -233,7 +233,13 @@ describe("import range and preview APIs", () => {
 });
 
 describe("processing settings API", () => {
-  it("reads the default concurrency and persists an allowed preset", async () => {
+  const defaults = {
+    concurrency: 5,
+    bodyPageDurationSeconds: 2,
+    fullContentOutput: false,
+  };
+
+  it("reads the defaults and persists an allowed preset", async () => {
     const app = buildApp({ databasePath: ":memory:" });
 
     const initial = await app.inject({
@@ -241,7 +247,7 @@ describe("processing settings API", () => {
       url: "/api/settings/processing",
     });
     expect(initial.statusCode).toBe(200);
-    expect(initial.json()).toEqual({ concurrency: 5 });
+    expect(initial.json()).toEqual(defaults);
 
     const updated = await app.inject({
       method: "PUT",
@@ -249,13 +255,41 @@ describe("processing settings API", () => {
       payload: { concurrency: 15 },
     });
     expect(updated.statusCode).toBe(200);
-    expect(updated.json()).toEqual({ concurrency: 15 });
+    expect(updated.json()).toEqual({ ...defaults, concurrency: 15 });
 
     const reread = await app.inject({
       method: "GET",
       url: "/api/settings/processing",
     });
-    expect(reread.json()).toEqual({ concurrency: 15 });
+    expect(reread.json()).toEqual({ ...defaults, concurrency: 15 });
+    await app.close();
+  });
+
+  it("merges partial patches with the stored settings", async () => {
+    const app = buildApp({ databasePath: ":memory:" });
+
+    const duration = await app.inject({
+      method: "PUT",
+      url: "/api/settings/processing",
+      payload: { bodyPageDurationSeconds: 1.5 },
+    });
+    expect(duration.statusCode).toBe(200);
+    expect(duration.json()).toEqual({
+      ...defaults,
+      bodyPageDurationSeconds: 1.5,
+    });
+
+    const fullContent = await app.inject({
+      method: "PUT",
+      url: "/api/settings/processing",
+      payload: { fullContentOutput: true },
+    });
+    expect(fullContent.statusCode).toBe(200);
+    expect(fullContent.json()).toEqual({
+      ...defaults,
+      bodyPageDurationSeconds: 1.5,
+      fullContentOutput: true,
+    });
     await app.close();
   });
 
@@ -265,6 +299,18 @@ describe("processing settings API", () => {
       method: "PUT",
       url: "/api/settings/processing",
       payload: { concurrency: 7 },
+    });
+    expect(rejected.statusCode).toBe(400);
+    expect(rejected.json()).toMatchObject({ error: "VALIDATION_ERROR" });
+    await app.close();
+  });
+
+  it("rejects body-page durations outside the preset list", async () => {
+    const app = buildApp({ databasePath: ":memory:" });
+    const rejected = await app.inject({
+      method: "PUT",
+      url: "/api/settings/processing",
+      payload: { bodyPageDurationSeconds: 4 },
     });
     expect(rejected.statusCode).toBe(400);
     expect(rejected.json()).toMatchObject({ error: "VALIDATION_ERROR" });

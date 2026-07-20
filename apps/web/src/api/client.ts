@@ -182,7 +182,11 @@ let mockBgm: BgmSettingsView = {
   hasAudio: false,
 };
 
-let mockProcessing: ProcessingSettings = { concurrency: 5 };
+let mockProcessing: ProcessingSettings = {
+  concurrency: 5,
+  bodyPageDurationSeconds: 2,
+  fullContentOutput: false,
+};
 
 let mockAiSettings: AiSettingsView = {
   apiKey: null,
@@ -638,10 +642,12 @@ export const apiClient = {
   },
 
   async updateProcessing(patch: {
-    concurrency: number;
+    concurrency?: number;
+    bodyPageDurationSeconds?: number;
+    fullContentOutput?: boolean;
   }): Promise<ProcessingSettings> {
     if (useMockApi) {
-      mockProcessing = { concurrency: patch.concurrency };
+      mockProcessing = { ...mockProcessing, ...patch };
       return mockDelay({ ...mockProcessing });
     }
     if (window.desktop) return window.desktop.updateProcessing(patch);

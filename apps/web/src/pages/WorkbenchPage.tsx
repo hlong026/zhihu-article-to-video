@@ -19,6 +19,7 @@ import {
 import { BgmSettingsCard } from "../components/BgmSettingsCard";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { ImportRangeDialog } from "../components/ImportRangeDialog";
+import { ProcessingSettingsCard } from "../components/ProcessingSettingsCard";
 import { TaskTable } from "../components/TaskTable";
 import { useToast } from "../components/Toast";
 import { WorkbenchPreview } from "../components/WorkbenchPreview";
@@ -416,6 +417,7 @@ export function WorkbenchPage() {
       </header>
 
       <BgmSettingsCard onNotice={(msg) => toast(msg, "info")} />
+      <ProcessingSettingsCard onNotice={(msg) => toast(msg, "info")} />
 
       {workbench && selectedTask ? (
         <>
