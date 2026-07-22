@@ -20,6 +20,7 @@ import {
   truncateVideoTitle,
   writeSummaryPngCards,
   writeSummarySvgCards,
+  writeZhihuReadingPagePngs,
   validateVideoSummary,
   SCROLL_STRIP_WIDTH,
   BOTTOM_BAR_HEIGHT,
@@ -431,7 +432,11 @@ export async function runPipelineTests(): Promise<void> {
   );
   equal(cards[0]?.kind, "cover", "first card should be cover");
   equal(cards[1]?.kind, "body", "middle cards should be body cards");
-  equal(cards[3]?.kind, "body", "last card should be a body card with CTA overlay");
+  equal(
+    cards[3]?.kind,
+    "body",
+    "last card should be a body card with CTA overlay",
+  );
   equal(
     (cards[3] as { ctaOverlay?: string }).ctaOverlay,
     "来知乎搜索「三个方法」看全文",
@@ -1042,11 +1047,7 @@ export async function runPipelineTests(): Promise<void> {
   }
 
   // ── Custom body-page dwell time ─────────────────────────────────────
-  equal(
-    durationForCard("cover"),
-    1,
-    "the cover defaults to one second",
-  );
+  equal(durationForCard("cover"), 1, "the cover defaults to one second");
   equal(
     durationForCard("cover", { coverPageDurationSeconds: 3 }),
     3,
@@ -1073,7 +1074,10 @@ export async function runPipelineTests(): Promise<void> {
     "a 4s body dwell time should yield cover 1 + 3×4",
   );
   equal(
-    totalVideoDuration(cards, { coverPageDurationSeconds: 2, bodyPageDurationSeconds: 5 }),
+    totalVideoDuration(cards, {
+      coverPageDurationSeconds: 2,
+      bodyPageDurationSeconds: 5,
+    }),
     17,
     "cover 2 + 3×5 = 17",
   );
@@ -1215,8 +1219,16 @@ export async function runPipelineTests(): Promise<void> {
   equal(scrollSpeedToPixelsPerSecond(3), 160, "speed 3 should map to 160 px/s");
   equal(scrollSpeedToPixelsPerSecond(4), 200, "speed 4 should map to 200 px/s");
   equal(scrollSpeedToPixelsPerSecond(5), 240, "speed 5 should map to 240 px/s");
-  equal(scrollSpeedToPixelsPerSecond(0), 80, "speed below 1 should clamp to 80 px/s");
-  equal(scrollSpeedToPixelsPerSecond(10), 240, "speed above 5 should clamp to 240 px/s");
+  equal(
+    scrollSpeedToPixelsPerSecond(0),
+    80,
+    "speed below 1 should clamp to 80 px/s",
+  );
+  equal(
+    scrollSpeedToPixelsPerSecond(10),
+    240,
+    "speed above 5 should clamp to 240 px/s",
+  );
 
   // ─── Zhihu scroll strip rendering ──────────────────────────────────────
   const stripResult = renderZhihuScrollStrip({
@@ -1231,18 +1243,100 @@ export async function runPipelineTests(): Promise<void> {
     },
     tags: ["AI", "强化学习"],
     fullContentOutput: false,
+    tailNote: "来知乎搜索🔍强化学习可以看到全文",
   });
-  equal(stripResult.width, SCROLL_STRIP_WIDTH, "scroll strip width should be 1080");
+  equal(
+    stripResult.width,
+    SCROLL_STRIP_WIDTH,
+    "scroll strip width should be 1080",
+  );
   equal(stripResult.height > 0, true, "scroll strip height should be positive");
-  equal(stripResult.svg.includes("如何理解强化学习"), true, "scroll strip should contain the source title");
-  equal(stripResult.svg.includes("测试作者"), true, "scroll strip should contain the author name");
-  equal(stripResult.svg.includes("123 个回答"), true, "scroll strip should contain the answer count");
-  equal(stripResult.svg.includes("456 个关注"), true, "scroll strip should contain the follow count");
-  equal(stripResult.svg.includes("第一段内容测试。"), true, "scroll strip should contain body paragraphs");
-  equal(stripResult.svg.includes("节选于知乎"), true, "scroll strip should contain the attribution footer");
+  equal(
+    stripResult.svg.includes("如何理解强化学习"),
+    true,
+    "scroll strip should contain the source title",
+  );
+  equal(
+    stripResult.svg.includes("测试作者"),
+    true,
+    "scroll strip should contain the author name",
+  );
+  equal(
+    stripResult.svg.includes("123 个回答"),
+    true,
+    "scroll strip should contain the answer count",
+  );
+  equal(
+    stripResult.svg.includes("456 个关注"),
+    true,
+    "scroll strip should contain the follow count",
+  );
+  equal(
+    stripResult.svg.includes("第一段内容测试。"),
+    true,
+    "scroll strip should contain body paragraphs",
+  );
+  equal(
+    stripResult.svg.includes("节选于知乎"),
+    true,
+    "scroll strip should contain the attribution footer",
+  );
+  equal(
+    stripResult.svg.includes("来知乎搜索强化学习可以看到全文"),
+    true,
+    "scroll strip should place the verified keyword on its final reading page",
+  );
+  equal(
+    stripResult.svg.includes("🔍"),
+    false,
+    "tail artwork should keep the visual prompt focused on its keyword",
+  );
+
+  const readingPagesDirectory = await mkdtemp(
+    join(tmpdir(), "zhihu-reading-pages-"),
+  );
+  try {
+    const readingPages = await writeZhihuReadingPagePngs(
+      readingPagesDirectory,
+      {
+        sourceTitle: "如何理解强化学习",
+        paragraphs: Array.from(
+          { length: 30 },
+          (_, index) =>
+            `第${index + 1}段内容测试，用于生成连续的知乎阅读页截图。`,
+        ),
+        meta: null,
+        tags: [],
+        fullContentOutput: false,
+        tailNote: "来知乎搜索🔍强化学习可以看到全文",
+      },
+      null,
+    );
+    equal(
+      readingPages.pagePaths.length > 1,
+      true,
+      "long reading content should be split into source-page screenshots",
+    );
+    equal(
+      readingPages.pagePaths[0]?.endsWith("01-reading.png"),
+      true,
+      "reading-page screenshots should keep a stable order",
+    );
+    const firstPage = await readFile(readingPages.pagePaths[0]!);
+    deepEqual(
+      [...firstPage.subarray(0, 8)],
+      [137, 80, 78, 71, 13, 10, 26, 10],
+      "reading-page screenshots should be PNG files",
+    );
+  } finally {
+    await rm(readingPagesDirectory, { recursive: true, force: true });
+  }
 
   // Truncation: many paragraphs without fullContentOutput
-  const longParagraphs = Array.from({ length: 200 }, (_, i) => `第${i + 1}段很长的内容，用于测试截断逻辑是否正常工作。`);
+  const longParagraphs = Array.from(
+    { length: 200 },
+    (_, i) => `第${i + 1}段很长的内容，用于测试截断逻辑是否正常工作。`,
+  );
   const truncatedStrip = renderZhihuScrollStrip({
     sourceTitle: "超长文章",
     paragraphs: longParagraphs,
@@ -1250,7 +1344,11 @@ export async function runPipelineTests(): Promise<void> {
     tags: [],
     fullContentOutput: false,
   });
-  equal(truncatedStrip.svg.includes("……"), true, "truncated scroll strip should end with an ellipsis");
+  equal(
+    truncatedStrip.svg.includes("……"),
+    true,
+    "truncated scroll strip should end with an ellipsis",
+  );
 
   // Full content mode: no truncation
   const fullStrip = renderZhihuScrollStrip({
@@ -1260,7 +1358,11 @@ export async function runPipelineTests(): Promise<void> {
     tags: [],
     fullContentOutput: true,
   });
-  equal(fullStrip.height > truncatedStrip.height, true, "full-content scroll strip should be taller than truncated");
+  equal(
+    fullStrip.height > truncatedStrip.height,
+    true,
+    "full-content scroll strip should be taller than truncated",
+  );
 
   // ─── Bottom bar rendering ──────────────────────────────────────────────
   const barSvg = renderBottomBar({
@@ -1270,9 +1372,21 @@ export async function runPipelineTests(): Promise<void> {
     followCount: null,
     avatarDataUri: null,
   });
-  equal(barSvg.includes("作"), true, "bottom bar should render the author initial when no avatar");
-  equal(barSvg.includes("+ 关注"), true, "bottom bar should include the follow button");
-  equal(barSvg.includes("▲"), true, "bottom bar should include interaction icons");
+  equal(
+    barSvg.includes("作"),
+    true,
+    "bottom bar should render the author initial when no avatar",
+  );
+  equal(
+    barSvg.includes("+ 关注"),
+    true,
+    "bottom bar should include the follow button",
+  );
+  equal(
+    barSvg.includes("▲"),
+    true,
+    "bottom bar should include interaction icons",
+  );
 
   // ─── FFmpeg scroll overlay command ─────────────────────────────────────
   const overlayCmd = buildFfmpegScrollOverlayCommand(
@@ -1283,14 +1397,46 @@ export async function runPipelineTests(): Promise<void> {
     1,
   );
   equal(overlayCmd.executable, "ffmpeg", "overlay command should use ffmpeg");
-  equal(overlayCmd.durationSeconds > 0, true, "overlay command should have positive duration");
-  equal(overlayCmd.args.includes("-loop"), true, "overlay command should loop the input");
+  equal(
+    overlayCmd.durationSeconds > 0,
+    true,
+    "overlay command should have positive duration",
+  );
+  equal(
+    overlayCmd.args.includes("-loop"),
+    true,
+    "overlay command should loop the input",
+  );
   const filterArg = overlayCmd.args.find((a) => a.includes("crop="));
-  equal(filterArg !== undefined, true, "overlay command should include a crop filter");
-  equal(filterArg?.includes("1780"), true, "overlay crop viewport should be 1780px");
-  equal(filterArg?.includes("pad=1080:1920"), true, "overlay should pad the canvas to 1920px height");
+  equal(
+    filterArg !== undefined,
+    true,
+    "overlay command should include a crop filter",
+  );
+  equal(
+    filterArg?.includes("1780"),
+    true,
+    "overlay crop viewport should be 1780px",
+  );
+  equal(
+    filterArg?.includes("pad=1080:1920"),
+    true,
+    "overlay should pad the canvas to 1920px height",
+  );
   const overlayArg = overlayCmd.args.find((a) => a.includes("overlay="));
-  equal(overlayArg !== undefined, true, "overlay command should include an overlay filter");
-  equal(overlayArg?.includes("overlay=0:1780"), true, "overlay should position the bar at y=1780");
-  equal(overlayArg?.includes("format=yuv420p"), true, "overlay output should include format=yuv420p for libx264");
+  equal(
+    overlayArg !== undefined,
+    true,
+    "overlay command should include an overlay filter",
+  );
+  equal(
+    overlayArg?.includes("overlay=0:1780"),
+    true,
+    "overlay should position the bar at y=1780",
+  );
+  equal(
+    overlayArg?.includes("format=yuv420p"),
+    true,
+    "overlay output should include format=yuv420p for libx264",
+  );
 }

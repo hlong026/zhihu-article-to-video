@@ -63,4 +63,37 @@ describe("media renderer", () => {
       await rm(directory, { recursive: true, force: true });
     }
   });
+
+  it("uses Zhihu reading-page screenshots for the horizontal reference mode", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "zhihu-reading-renderer-"));
+    let receivedCommand: FfmpegCommand | null = null;
+
+    try {
+      const assets = await renderVideoAssets(
+        {
+          outputDirectory: directory,
+          summary,
+          keyword: "测试口令",
+          videoMode: "slide",
+          cleanedParagraphs: Array.from(
+            { length: 30 },
+            (_, index) =>
+              `第${index + 1}段原文，模拟知乎阅读页的连续分屏输出。`,
+          ),
+        },
+        {
+          executeFfmpeg: async (command) => {
+            receivedCommand = command;
+          },
+        },
+      );
+
+      expect(assets.imagePaths.length).toBeGreaterThan(1);
+      expect(assets.imagePaths[0]).toMatch(/01-reading\.png$/);
+      expect(assets.imagePaths.at(-1)).toMatch(/reading\.png$/);
+      expect(receivedCommand).toMatchObject({ executable: "ffmpeg" });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
 });
