@@ -1,5 +1,6 @@
 import {
   buildCardSequence,
+  buildFfmpegScrollOverlayCommand,
   buildFfmpegVideoCommand,
   buildPreparedVideo,
   cleanReadableContent,
@@ -11,12 +12,17 @@ import {
   measureBodyLayout,
   paginateParagraphs,
   parseTitleAndTags,
+  renderBottomBar,
   renderSummarySvgCards,
+  renderZhihuScrollStrip,
+  scrollSpeedToPixelsPerSecond,
   simplifyMathMarkup,
   truncateVideoTitle,
   writeSummaryPngCards,
   writeSummarySvgCards,
   validateVideoSummary,
+  SCROLL_STRIP_WIDTH,
+  BOTTOM_BAR_HEIGHT,
   type VideoSummary,
 } from "../index.js";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
@@ -599,14 +605,34 @@ export async function runPipelineTests(): Promise<void> {
 
   const legacyCoverSvg = renderSummarySvgCards(validSummary, "三个方法")[0];
   equal(
-    legacyCoverSvg?.svg.includes("知乎 · 内容创作 · 知乎 · AI"),
+    legacyCoverSvg?.svg.includes(">知乎</text>"),
     true,
-    "a cover without page metadata should keep the tags meta line",
+    "a cover without page metadata should keep the plain source meta line",
+  );
+  equal(
+    legacyCoverSvg?.svg.includes("知乎 · 内容创作"),
+    false,
+    "tags should not be duplicated in the meta line when chips show them",
   );
   equal(
     legacyCoverSvg?.svg.includes("+ 关注"),
     false,
     "a cover without page metadata should not render the author block",
+  );
+  equal(
+    legacyCoverSvg?.svg.includes("第一页正文内容从这里开始"),
+    false,
+    "cover should never repeat body text shown on the first body card",
+  );
+  equal(
+    legacyCoverSvg?.svg.includes('fill="#F6F6F6"'),
+    true,
+    "a cover without page metadata should fill the footer with tag chips",
+  );
+  equal(
+    metaCoverSvg?.svg.includes('fill="#F6F6F6"'),
+    false,
+    "a cover with an author block should not render tag chips",
   );
 
   const escapedAuthorSvg = renderSummarySvgCards(
@@ -1182,4 +1208,89 @@ export async function runPipelineTests(): Promise<void> {
       "the full-content video should end with a body card with CTA overlay",
     );
   }
+
+  // ─── Scroll speed mapping ───────────────────────────────────────────────
+  equal(scrollSpeedToPixelsPerSecond(1), 80, "speed 1 should map to 80 px/s");
+  equal(scrollSpeedToPixelsPerSecond(2), 120, "speed 2 should map to 120 px/s");
+  equal(scrollSpeedToPixelsPerSecond(3), 160, "speed 3 should map to 160 px/s");
+  equal(scrollSpeedToPixelsPerSecond(4), 200, "speed 4 should map to 200 px/s");
+  equal(scrollSpeedToPixelsPerSecond(5), 240, "speed 5 should map to 240 px/s");
+  equal(scrollSpeedToPixelsPerSecond(0), 80, "speed below 1 should clamp to 80 px/s");
+  equal(scrollSpeedToPixelsPerSecond(10), 240, "speed above 5 should clamp to 240 px/s");
+
+  // ─── Zhihu scroll strip rendering ──────────────────────────────────────
+  const stripResult = renderZhihuScrollStrip({
+    sourceTitle: "如何理解强化学习",
+    paragraphs: ["第一段内容测试。", "第二段内容测试。", "第三段内容测试。"],
+    meta: {
+      authorName: "测试作者",
+      authorBadge: "优秀答主",
+      answerCount: "123",
+      followCount: "456",
+      avatarDataUri: null,
+    },
+    tags: ["AI", "强化学习"],
+    fullContentOutput: false,
+  });
+  equal(stripResult.width, SCROLL_STRIP_WIDTH, "scroll strip width should be 1080");
+  equal(stripResult.height > 0, true, "scroll strip height should be positive");
+  equal(stripResult.svg.includes("如何理解强化学习"), true, "scroll strip should contain the source title");
+  equal(stripResult.svg.includes("测试作者"), true, "scroll strip should contain the author name");
+  equal(stripResult.svg.includes("123 个回答"), true, "scroll strip should contain the answer count");
+  equal(stripResult.svg.includes("456 个关注"), true, "scroll strip should contain the follow count");
+  equal(stripResult.svg.includes("第一段内容测试。"), true, "scroll strip should contain body paragraphs");
+  equal(stripResult.svg.includes("节选于知乎"), true, "scroll strip should contain the attribution footer");
+
+  // Truncation: many paragraphs without fullContentOutput
+  const longParagraphs = Array.from({ length: 200 }, (_, i) => `第${i + 1}段很长的内容，用于测试截断逻辑是否正常工作。`);
+  const truncatedStrip = renderZhihuScrollStrip({
+    sourceTitle: "超长文章",
+    paragraphs: longParagraphs,
+    meta: null,
+    tags: [],
+    fullContentOutput: false,
+  });
+  equal(truncatedStrip.svg.includes("……"), true, "truncated scroll strip should end with an ellipsis");
+
+  // Full content mode: no truncation
+  const fullStrip = renderZhihuScrollStrip({
+    sourceTitle: "超长文章",
+    paragraphs: longParagraphs,
+    meta: null,
+    tags: [],
+    fullContentOutput: true,
+  });
+  equal(fullStrip.height > truncatedStrip.height, true, "full-content scroll strip should be taller than truncated");
+
+  // ─── Bottom bar rendering ──────────────────────────────────────────────
+  const barSvg = renderBottomBar({
+    authorName: "作者",
+    authorBadge: null,
+    answerCount: null,
+    followCount: null,
+    avatarDataUri: null,
+  });
+  equal(barSvg.includes("作"), true, "bottom bar should render the author initial when no avatar");
+  equal(barSvg.includes("+ 关注"), true, "bottom bar should include the follow button");
+  equal(barSvg.includes("▲"), true, "bottom bar should include interaction icons");
+
+  // ─── FFmpeg scroll overlay command ─────────────────────────────────────
+  const overlayCmd = buildFfmpegScrollOverlayCommand(
+    "/tmp/strip.png",
+    10000,
+    "/tmp/bar.png",
+    "/tmp/video.mp4",
+    1,
+  );
+  equal(overlayCmd.executable, "ffmpeg", "overlay command should use ffmpeg");
+  equal(overlayCmd.durationSeconds > 0, true, "overlay command should have positive duration");
+  equal(overlayCmd.args.includes("-loop"), true, "overlay command should loop the input");
+  const filterArg = overlayCmd.args.find((a) => a.includes("crop="));
+  equal(filterArg !== undefined, true, "overlay command should include a crop filter");
+  equal(filterArg?.includes("1780"), true, "overlay crop viewport should be 1780px");
+  equal(filterArg?.includes("pad=1080:1920"), true, "overlay should pad the canvas to 1920px height");
+  const overlayArg = overlayCmd.args.find((a) => a.includes("overlay="));
+  equal(overlayArg !== undefined, true, "overlay command should include an overlay filter");
+  equal(overlayArg?.includes("overlay=0:1780"), true, "overlay should position the bar at y=1780");
+  equal(overlayArg?.includes("format=yuv420p"), true, "overlay output should include format=yuv420p for libx264");
 }

@@ -18,11 +18,9 @@ export interface CoverCardRenderModel extends BaseCardRenderModel {
   sourceLabel: "知乎";
   title: string;
   tags: string[];
-  /** First lines of the article body, shown under the title like Zhihu's card. */
-  preview: string[];
   /**
-   * Question-header metadata (author block + counters) rendered between the
-   * meta line and the preview; null keeps the legacy tags-only cover.
+   * Question-header metadata (author block + counters) rendered in the cover
+   * footer; null renders the tags chips fallback instead.
    */
   meta: SourcePageMeta | null;
 }
@@ -64,11 +62,9 @@ export function buildCardSequence(
   }
 
   const totalPages = summary.pages.length + 1; // cover + body pages (no separate tail)
-  // The cover mirrors the source page: original question/article title first,
-  // then its opening lines. The AI title remains useful for task/file naming.
-  const previewLines = (summary.pages[0]?.body.split("\n") ?? [])
-    .filter((line) => line !== "")
-    .slice(0, 6);
+  // The cover is a pure title card: original question/article title plus
+  // source metadata. Body text starts on page 2 so nothing on the cover is
+  // ever repeated by the first body card.
   const cover: CoverCardRenderModel = {
     kind: "cover",
     canvas: cardCanvas,
@@ -77,7 +73,6 @@ export function buildCardSequence(
     sourceLabel: "知乎",
     title: summary.sourceTitle,
     tags: summary.tags,
-    preview: previewLines,
     meta: summary.coverMeta ?? null,
     text: summary.sourceTitle,
   };

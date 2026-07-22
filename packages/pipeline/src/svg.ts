@@ -125,50 +125,90 @@ export async function writeSummaryPngCards(
   );
 }
 
+/**
+ * Pure title card: no body text, so the first body card never repeats the
+ * cover. The title block is vertically centered between the top margin and
+ * the footer band (author block or tag chips), so short titles and missing
+ * author metadata never leave the canvas looking half-empty.
+ */
 function renderCover(
   card: Extract<CardRenderModel, { kind: "cover" }>,
 ): string {
-  const titleLines = wrapText(card.title, 14, 3);
+  const titleLines = wrapText(card.title, 13, 4);
   const metaLine = coverMetaLine(card);
-  const metaY = 240 + titleLines.length * 96 + 40;
+  const showAuthor = Boolean(card.meta?.authorName?.trim());
+
+  const zoneTop = 280;
+  const footerTop = 1640;
+  const zoneBottom = footerTop - 80;
+  const titleLineHeight = 112;
+  const titleToMetaGap = 56;
+  const metaFontSize = 40;
+  const blockHeight =
+    titleLines.length * titleLineHeight + titleToMetaGap + metaFontSize;
+  const titleY =
+    zoneTop + Math.max(0, Math.round((zoneBottom - zoneTop - blockHeight) / 2));
+  const metaY = titleY + titleLines.length * titleLineHeight + titleToMetaGap;
+
   const parts = [
     '<rect width="1080" height="1920" fill="#FFFFFF"/>',
+    // Zhihu-blue accent bar floating above the title block.
+    `<rect x="90" y="${titleY - 100}" width="72" height="10" rx="5" fill="#056DE8"/>`,
     svgText(titleLines, {
       x: 90,
-      y: 240,
-      fontSize: 64,
-      lineHeight: 96,
+      y: titleY,
+      fontSize: 76,
+      lineHeight: titleLineHeight,
       fill: "#111111",
       weight: 700,
     }),
-    `<text x="90" y="${metaY}" fill="#8590A6" font-size="36">${escapeSvgText(metaLine)}</text>`,
+    `<text x="90" y="${metaY}" fill="#8590A6" font-size="${metaFontSize}">${escapeSvgText(metaLine)}</text>`,
   ];
 
-  // The author block mirrors Zhihu's question header: avatar, name + badge,
-  // and a decorative follow pill. It only renders when the reader captured
-  // an author name; otherwise the legacy layout positions are untouched.
-  const showAuthor = Boolean(card.meta?.authorName?.trim());
-  const dividerY = showAuthor ? metaY + 56 + 88 + 40 : metaY + 44;
+  // Footer band: the author block mirrors Zhihu's question header when the
+  // reader captured an author; otherwise tags render as chips filling the
+  // same band so the bottom of the card is never blank.
   if (showAuthor && card.meta) {
-    parts.push(renderAuthorBlock(card.meta, metaY + 56));
-  }
-  if (card.preview.length > 0) {
-    parts.push(
-      `<line x1="90" y1="${dividerY}" x2="990" y2="${dividerY}" stroke="#EBEBEB" stroke-width="2"/>`,
-      svgText(card.preview, {
-        x: 90,
-        y: dividerY + 66,
-        fontSize: 48,
-        lineHeight: 82,
-        fill: "#1A1A1A",
-        weight: 400,
-      }),
-    );
+    parts.push(renderAuthorBlock(card.meta, footerTop));
+  } else {
+    const chips = renderTagChips(card.tags, footerTop);
+    if (chips) parts.push(chips);
   }
   return parts.join("\n");
 }
 
-/** "知乎 · N 个回答 · M 关注" when counters exist, else the tags line. */
+/**
+ * Rounded tag chips anchored to the cover footer when no author is shown.
+ * Tags are capped at 12 characters so a single chip (≤504px) can never
+ * overflow the 90→990 content column.
+ */
+function renderTagChips(tags: string[], top: number): string {
+  const parts: string[] = [];
+  let x = 90;
+  let row = 0;
+  for (const rawTag of tags) {
+    const tag = Array.from(rawTag.trim()).slice(0, 12).join("");
+    if (!tag) continue;
+    const chipWidth = Array.from(tag).length * 38 + 48;
+    if (x + chipWidth > 990) {
+      row += 1;
+      x = 90;
+      if (row > 1) break;
+    }
+    const y = top + 12 + row * 84;
+    parts.push(
+      `<rect x="${x}" y="${y}" width="${chipWidth}" height="64" rx="32" fill="#F6F6F6"/>`,
+      `<text x="${x + chipWidth / 2}" y="${y + 43}" text-anchor="middle" fill="#444444" font-size="34">${escapeSvgText(tag)}</text>`,
+    );
+    x += chipWidth + 20;
+  }
+  return parts.join("\n");
+}
+
+/**
+ * "知乎 · N 个回答 · M 关注" when counters exist, else just "知乎" — tags
+ * live only in the footer chips so they never appear twice on one cover.
+ */
 function coverMetaLine(
   card: Extract<CardRenderModel, { kind: "cover" }>,
 ): string {
@@ -178,9 +218,6 @@ function coverMetaLine(
   }
   if (card.meta?.followCount?.trim()) {
     segments.push(`${card.meta.followCount.trim()} 关注`);
-  }
-  if (segments.length === 1) {
-    segments.push(...card.tags);
   }
   return segments.filter((item) => item.trim().length > 0).join(" · ");
 }

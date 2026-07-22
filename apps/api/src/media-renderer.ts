@@ -4,10 +4,13 @@ import { spawn } from "node:child_process";
 
 import {
   buildFfmpegScrollCommand,
+  buildFfmpegScrollOverlayCommand,
   buildFfmpegVideoCommand,
+  writeScrollPngs,
   writeSummaryPngCards,
   type FfmpegAudioOptions,
   type FfmpegCommand,
+  type SourcePageMeta,
   type VideoSummary,
   type VideoTimingOptions,
 } from "@zhihu-video/pipeline";
@@ -25,7 +28,7 @@ export interface RenderVideoInput {
   timing?: VideoTimingOptions;
   /** Video mode: "slide" (default) or "scroll". */
   videoMode?: VideoMode;
-  /** Scroll speed 1~5 (only for scroll mode, default 3). */
+  /** Scroll speed 1~5 (only for scroll mode, default 1). */
   scrollSpeed?: number;
   /** Reports per-card progress (done, total) while PNGs are rasterized. */
   onImageProgress?: (done: number, total: number) => void;
@@ -35,6 +38,12 @@ export interface RenderVideoInput {
   ffmpegExecutable?: string;
   /** Custom tail-page CTA template; {文章口令} is interpolated at render time. */
   tailTemplate?: string;
+  /** Cleaned article paragraphs (required for scroll mode Zhihu-UI strip). */
+  cleanedParagraphs?: string[];
+  /** Page metadata for the Zhihu-UI scroll strip author block. */
+  coverMeta?: SourcePageMeta | null;
+  /** When true, scroll mode renders the full article without line cap. */
+  fullContentOutput?: boolean;
 }
 
 export interface RenderedVideoAssets {
@@ -61,6 +70,12 @@ export async function renderVideoAssets(
   const videoPath = join(input.outputDirectory, "video.mp4");
   await mkdir(input.outputDirectory, { recursive: true });
 
+  // ─── Scroll mode: Zhihu-UI continuous strip + fixed bottom bar ───────────
+  if (input.videoMode === "scroll" && input.cleanedParagraphs?.length) {
+    return renderScrollOverlay(input, imageDirectory, videoPath, dependencies);
+  }
+
+  // ─── Slide mode (default): paginated cards ───────────────────────────────
   const writeCards = dependencies.writeCards ?? writeSummaryPngCards;
   const cards = await writeCards(
     imageDirectory,
@@ -78,7 +93,7 @@ export async function renderVideoAssets(
           cardModels,
           paths,
           videoPath,
-          input.scrollSpeed ?? 3,
+          input.scrollSpeed ?? 1,
           input.audio,
         )
       : buildFfmpegVideoCommand(
@@ -94,6 +109,54 @@ export async function renderVideoAssets(
 
   return {
     imagePaths: cards.map(({ outputPath }) => outputPath),
+    videoPath,
+    durationSeconds: command.durationSeconds,
+  };
+}
+
+/**
+ * Scroll-overlay path: renders the Zhihu-UI tall strip + bottom bar as PNGs,
+ * then encodes a video with a fixed interaction bar overlaid at the bottom.
+ */
+async function renderScrollOverlay(
+  input: RenderVideoInput,
+  imageDirectory: string,
+  videoPath: string,
+  dependencies: MediaRendererDependencies,
+): Promise<RenderedVideoAssets> {
+  await mkdir(imageDirectory, { recursive: true });
+  input.onImageProgress?.(0, 2);
+
+  // 1+2. Render tall content strip + bottom bar as PNGs
+  const barMeta = input.coverMeta ?? input.summary.coverMeta ?? null;
+  const pngs = await writeScrollPngs(
+    imageDirectory,
+    {
+      sourceTitle: input.summary.sourceTitle,
+      paragraphs: input.cleanedParagraphs!,
+      meta: barMeta,
+      tags: input.summary.tags,
+      fullContentOutput: input.fullContentOutput ?? false,
+    },
+    barMeta,
+  );
+  input.onImageProgress?.(2, 2);
+
+  // 3. Encode video
+  const command = buildFfmpegScrollOverlayCommand(
+    pngs.stripPath,
+    pngs.stripHeight,
+    pngs.barPath,
+    videoPath,
+    input.scrollSpeed ?? 1,
+    input.audio,
+  );
+
+  input.onVideoEncodingStart?.();
+  await (dependencies.executeFfmpeg ?? executeFfmpeg)(command, input.ffmpegExecutable);
+
+  return {
+    imagePaths: [pngs.stripPath, pngs.barPath],
     videoPath,
     durationSeconds: command.durationSeconds,
   };

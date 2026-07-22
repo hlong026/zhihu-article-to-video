@@ -80,7 +80,7 @@ export class TaskWorker {
       bodyPageDurationSeconds: 3,
       fullContentOutput: false,
       videoMode: "slide" as const,
-      scrollSpeed: 3,
+      scrollSpeed: 1,
     };
     try {
       this.repository.reportTaskProgress(taskId, 5, "开始读取文章内容");
@@ -139,6 +139,9 @@ export class TaskWorker {
         scrollSpeed: videoSettings.scrollSpeed,
         ffmpegExecutable: this.dependencies.ffmpegExecutable,
         tailTemplate: task.tailNoteTemplate,
+        cleanedParagraphs: prepared.cleanedParagraphs,
+        coverMeta: prepared.summary.coverMeta,
+        fullContentOutput: videoSettings.fullContentOutput,
         onImageProgress: (done, total) =>
           this.repository.reportTaskProgress(
             taskId,
@@ -208,7 +211,7 @@ export class TaskWorker {
       bodyPageDurationSeconds: 3,
       fullContentOutput: false,
       videoMode: "slide" as const,
-      scrollSpeed: 3,
+      scrollSpeed: 1,
     };
     const content: {
       title: string;
@@ -267,6 +270,9 @@ export class TaskWorker {
         scrollSpeed: videoSettings.scrollSpeed,
         ffmpegExecutable: this.dependencies.ffmpegExecutable,
         tailTemplate: task.tailNoteTemplate,
+        cleanedParagraphs: content.paragraphs,
+        coverMeta: content.meta ?? null,
+        fullContentOutput: videoSettings.fullContentOutput,
         onImageProgress: (done, total) =>
           this.repository.reportTaskProgress(
             taskId,

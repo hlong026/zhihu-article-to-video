@@ -145,12 +145,102 @@ export function buildFfmpegVideoCommand(
 }
 
 /**
- * Maps scroll speed (1~5) to vertical pixels per second. Speed 3 (default)
- * scrolls at 300 px/s; each step adds/subtracts 100 px/s.
+ * Builds the FFmpeg command for the Zhihu-UI scroll mode: a single tall strip
+ * PNG scrolls behind a fixed bottom interaction bar overlay.
+ *
+ * Inputs: [0] tall content strip PNG, [1] bottom bar PNG, [2] optional BGM.
+ * Output: 1080×1920 video (1780px scroll viewport + 140px fixed bar).
+ */
+export function buildFfmpegScrollOverlayCommand(
+  stripImagePath: string,
+  stripHeight: number,
+  barImagePath: string,
+  outputPath: string,
+  scrollSpeed: number,
+  audio?: FfmpegAudioOptions,
+): FfmpegCommand {
+  const viewportHeight = 1780; // 1920 - 140 (bottom bar)
+  const pxPerSecond = scrollSpeedToPixelsPerSecond(scrollSpeed);
+  const maxScroll = Math.max(0, stripHeight - viewportHeight);
+  const durationSeconds = Math.max(
+    1,
+    maxScroll > 0 ? Math.ceil(maxScroll / pxPerSecond) : 1,
+  );
+
+  const args = ["-y"];
+  args.push("-loop", "1", "-i", stripImagePath);
+  args.push("-loop", "1", "-i", barImagePath);
+  if (audio) {
+    args.push("-stream_loop", "-1", "-i", audio.path);
+  }
+
+  // Crop a moving window from the tall strip, pad the canvas to 1920px,
+  // then overlay the fixed bar at the bottom.
+  const cropExpr = `min(t*${pxPerSecond},${maxScroll})`;
+  const videoFilter =
+    `[0:v]crop=1080:${viewportHeight}:0:'${cropExpr}',pad=1080:1920:0:0:color=#FFFFFF[scroll];` +
+    `[1:v]format=rgba[bar];` +
+    `[scroll][bar]overlay=0:${viewportHeight},format=yuv420p[v]`;
+
+  if (audio) {
+    const volume = clampVolume(audio.volume);
+    const fadeOut = Math.max(0, audio.fadeOutSeconds ?? 1);
+    const fadeStart = Math.max(0, durationSeconds - fadeOut);
+    const audioIndex = 2;
+    args.push(
+      "-filter_complex",
+      `${videoFilter};[${audioIndex}:a]atrim=0:${durationSeconds},asetpts=PTS-STARTPTS,volume=${volume},afade=t=out:st=${fadeStart}:d=${fadeOut}[a]`,
+      "-map",
+      "[v]",
+      "-map",
+      "[a]",
+      "-t",
+      String(durationSeconds),
+      "-r",
+      "30",
+      "-c:v",
+      "libx264",
+      "-c:a",
+      "aac",
+      "-b:a",
+      "192k",
+      "-movflags",
+      "+faststart",
+      outputPath,
+    );
+  } else {
+    args.push(
+      "-filter_complex",
+      videoFilter,
+      "-map",
+      "[v]",
+      "-t",
+      String(durationSeconds),
+      "-r",
+      "30",
+      "-c:v",
+      "libx264",
+      "-movflags",
+      "+faststart",
+      outputPath,
+    );
+  }
+
+  return {
+    executable: "ffmpeg",
+    args,
+    durationSeconds,
+  };
+}
+
+/**
+ * Maps scroll speed (1~5) to vertical pixels per second. Speed 1 (default)
+ * scrolls at 80 px/s for comfortable reading; each step adds 40 px/s
+ * (80 / 120 / 160 / 200 / 240).
  */
 export function scrollSpeedToPixelsPerSecond(speed: number): number {
   const clamped = Math.max(1, Math.min(5, Math.round(speed)));
-  return clamped * 100;
+  return 40 + clamped * 40;
 }
 
 /**
