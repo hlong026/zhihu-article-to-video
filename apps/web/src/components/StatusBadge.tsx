@@ -9,6 +9,7 @@ const statusCopy: Record<TaskStatus, string> = {
   completed: "已生成",
   failed: "失败",
   needs_review: "需人工确认",
+  aborted: "已取消",
 };
 
 export function StatusBadge({ status }: { status: TaskStatus }) {

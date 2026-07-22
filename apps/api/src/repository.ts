@@ -521,7 +521,8 @@ export class TaskRepository {
     result:
       | { kind: "advance"; to: PipelineStep | "completed"; message?: string }
       | { kind: "failed"; code: string; message: string }
-      | { kind: "needs_review"; code: string; message: string },
+      | { kind: "needs_review"; code: string; message: string }
+      | { kind: "aborted"; message: string },
   ): TaskDetail | null {
     const task = this.getTask(taskId);
     if (!task) return null;
@@ -541,6 +542,21 @@ export class TaskRepository {
         next,
         "completed",
         result.message ?? "步骤完成",
+        timestamp,
+      );
+    } else if (result.kind === "aborted") {
+      this.database
+        .prepare(
+          `UPDATE article_tasks
+           SET status = 'aborted', current_step = 'aborted', progress = 0, failure_code = NULL, failure_message = ?, updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(result.message, timestamp, taskId);
+      this.logAttempt(
+        taskId,
+        task.step,
+        "aborted",
+        result.message,
         timestamp,
       );
     } else {

@@ -7,6 +7,7 @@ export const taskStatuses = [
   "completed",
   "failed",
   "needs_review",
+  "aborted",
 ] as const;
 
 export type TaskStatus = (typeof taskStatuses)[number];

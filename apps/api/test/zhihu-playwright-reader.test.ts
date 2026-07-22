@@ -228,7 +228,7 @@ describe("extractInPage", () => {
   it("extracts the complete current answer header for the cover", () => {
     const content = fakeElement({
       selectorLists: {
-        p: [
+        "p:not(blockquote p), blockquote:not(blockquote blockquote)": [
           fakeElement({
             text: "第一段足够长的正文内容，用于验证当前知乎回答页结构。",
           }),
@@ -313,6 +313,55 @@ describe("extractInPage", () => {
           avatarUrl: "https://pic1.zhimg.com/v2-avatar_l.jpg",
         },
       });
+    } finally {
+      if (hadDocument) Reflect.set(globalThis, "document", originalDocument);
+      else Reflect.deleteProperty(globalThis, "document");
+    }
+  });
+
+  it("keeps quotes in DOM order without repeating their inner paragraphs", () => {
+    const content = fakeElement({
+      selectorLists: {
+        "p:not(blockquote p), blockquote:not(blockquote blockquote)": [
+          fakeElement({ text: "引用之前的普通段落。" }),
+          // This is the blockquote's complete innerText. Its nested <p>
+          // must not be emitted as a second, separate paragraph.
+          fakeElement({ text: "引用内容第一句。 引用内容第二句。" }),
+          fakeElement({ text: "引用之后的普通段落。" }),
+        ],
+        p: [
+          fakeElement({ text: "引用之前的普通段落。" }),
+          fakeElement({ text: "引用内容第一句。" }),
+          fakeElement({ text: "引用内容第二句。" }),
+          fakeElement({ text: "引用之后的普通段落。" }),
+        ],
+        blockquote: [fakeElement({ text: "引用内容第一句。 引用内容第二句。" })],
+      },
+    });
+    const fakeDocument = {
+      title: "引用示例 - 知乎",
+      body: fakeElement({ text: "知乎回答正文" }),
+      querySelector: (selector: string) =>
+        selector === ".RichContent-inner" ? content : null,
+      querySelectorAll: () => [],
+    };
+    const hadDocument = Reflect.has(globalThis, "document");
+    const originalDocument = Reflect.get(globalThis, "document");
+    Reflect.set(globalThis, "document", fakeDocument);
+
+    try {
+      expect(
+        extractInPage({
+          contentSelectors: [".RichContent-inner"],
+          titleSelectors: [],
+          authorSelectors: [],
+          questionCounters: false,
+        }).paragraphs,
+      ).toEqual([
+        "引用之前的普通段落。",
+        "引用内容第一句。 引用内容第二句。",
+        "引用之后的普通段落。",
+      ]);
     } finally {
       if (hadDocument) Reflect.set(globalThis, "document", originalDocument);
       else Reflect.deleteProperty(globalThis, "document");

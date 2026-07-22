@@ -5,20 +5,22 @@ export const pipelineSteps = [
   "summarizing",
   "rendering_images",
   "rendering_video",
+  "aborted",
 ] as const;
 
 export type PipelineStep = (typeof pipelineSteps)[number];
 export type RetryableStatus = Extract<TaskStatus, "failed" | "needs_review">;
 
 const nextStatuses: Record<TaskStatus, readonly TaskStatus[]> = {
-  pending: ["fetching", "needs_review"],
-  fetching: ["summarizing", "failed", "needs_review"],
-  summarizing: ["rendering_images", "failed", "needs_review"],
-  rendering_images: ["rendering_video", "failed"],
-  rendering_video: ["completed", "failed"],
+  pending: ["fetching", "needs_review", "aborted"],
+  fetching: ["summarizing", "failed", "needs_review", "aborted"],
+  summarizing: ["rendering_images", "failed", "needs_review", "aborted"],
+  rendering_images: ["rendering_video", "failed", "aborted"],
+  rendering_video: ["completed", "failed", "aborted"],
   completed: [],
   failed: [],
   needs_review: [],
+  aborted: [],
 };
 
 export class TaskStateError extends Error {
@@ -53,5 +55,6 @@ export function getRetryStep(task: {
 
 export function progressForStep(step: PipelineStep | "completed"): number {
   if (step === "completed") return 100;
+  if (step === "aborted") return 0;
   return (pipelineSteps.indexOf(step) * 100) / pipelineSteps.length;
 }

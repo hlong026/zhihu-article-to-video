@@ -275,6 +275,16 @@ export function WorkbenchPage() {
     }
   }
 
+  async function handleAbort(task: ArticleTask) {
+    try {
+      await apiClient.abortTask(task.id);
+      await refresh();
+      toast("任务已取消。", "success");
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "取消任务失败。", "error");
+    }
+  }
+
   async function handleSaveManualContent(title: string, content: string) {
     if (!selectedTask) return;
 

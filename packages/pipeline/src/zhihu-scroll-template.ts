@@ -30,6 +30,10 @@ const TITLE_FONT_SIZE = 54;
 const TITLE_LINE_HEIGHT = 76;
 /** Top padding for reading pages after the first (avoids text touching the edge). */
 const PAGE_TOP_PADDING = 60;
+/** Bottom breathing room above the fixed interaction bar on reading pages. */
+const PAGE_BOTTOM_PADDING = 60;
+/** Keeps comma/descender pixels on the previous reading page at a line break. */
+const PAGE_LINE_BREAK_GUARD = 16;
 
 const AUTHOR_BLOCK_HEIGHT = 160;
 const AUTHOR_PADDING_TOP = 32;
@@ -50,8 +54,6 @@ export interface ZhihuScrollRenderInput {
   meta: SourcePageMeta | null;
   tags: string[];
   fullContentOutput: boolean;
-  /** Attribution template; {title} is interpolated. */
-  attributionTemplate?: string;
   /** Verified search prompt overlaid above the bottom bar on the final page. */
   tailNote?: string;
 }
@@ -60,6 +62,8 @@ export interface ZhihuScrollRenderOutput {
   svg: string;
   width: number;
   height: number;
+  /** Top edge of the first body-text line box, used to cut reading pages safely. */
+  bodyTop: number;
 }
 
 // ─── Main render function ────────────────────────────────────────────────────
@@ -137,7 +141,8 @@ export function renderZhihuScrollStrip(
   y += 30;
 
   // Body text
-  parts.push(renderBodyLines(bodyLines, y));
+  const bodyTop = y;
+  parts.push(renderBodyLines(bodyLines, bodyTop));
   y += bodyHeight;
 
   if (input.tailNote?.trim()) {
@@ -150,6 +155,7 @@ export function renderZhihuScrollStrip(
     svg: parts.join("\n"),
     width: SCROLL_STRIP_WIDTH,
     height: totalHeight,
+    bodyTop,
   };
 }
 
@@ -214,11 +220,14 @@ export interface ScrollPngOutput {
   stripPath: string;
   barPath: string;
   stripHeight: number;
+  bodyTop: number;
 }
 
 export interface ReadingPagePngOutput extends ScrollPngOutput {
   /** Consecutive source-page screenshots, followed by one optional tail page. */
   pagePaths: string[];
+  /** Source Y offsets used for each screenshot, exposed for layout verification. */
+  pageOffsets: number[];
 }
 
 /**
@@ -245,7 +254,12 @@ export async function writeScrollPngs(
     .png()
     .toFile(barPath);
 
-  return { stripPath, barPath, stripHeight: strip.height };
+  return {
+    stripPath,
+    barPath,
+    stripHeight: strip.height,
+    bodyTop: strip.bodyTop,
+  };
 }
 
 /**
@@ -266,25 +280,30 @@ export async function writeZhihuReadingPagePngs(
     barMeta,
   );
   const viewportHeight = SCROLL_VIEWPORT_HEIGHT;
-  // Effective content height per page (pages after the first reserve top padding).
-  const effectiveHeight = viewportHeight - PAGE_TOP_PADDING;
-  // Snap content boundaries to body-line grid to avoid cutting text in half.
-  const snapToLine = (px: number) =>
-    Math.floor(px / BODY_LINE_HEIGHT) * BODY_LINE_HEIGHT;
-
+  // Reserve breathing room above and below the reading content instead of
+  // filling every remaining pixel right up to the interaction bar.
+  const readableHeight =
+    viewportHeight - PAGE_TOP_PADDING - PAGE_BOTTOM_PADDING;
+  const continuationHeight =
+    Math.floor(readableHeight / BODY_LINE_HEIGHT) * BODY_LINE_HEIGHT;
+  const firstPageLineCount = Math.max(
+    0,
+    Math.floor((readableHeight - rendered.bodyTop) / BODY_LINE_HEIGHT),
+  );
+  // The first page starts at the title. Every later page must start on the
+  // actual body-line grid, not a grid measured from the canvas top. The guard
+  // keeps punctuation and descenders on the earlier screenshot.
+  const firstPageHeight =
+    rendered.bodyTop +
+    firstPageLineCount * BODY_LINE_HEIGHT +
+    PAGE_LINE_BREAK_GUARD;
   const offsets: number[] = [0];
-  let cursor = snapToLine(effectiveHeight);
-  while (cursor < rendered.stripHeight - PAGE_TOP_PADDING) {
-    offsets.push(cursor);
-    cursor += snapToLine(effectiveHeight);
-  }
-  // Ensure the last page reaches the strip bottom if there's remaining content.
-  const lastOffset = offsets[offsets.length - 1]!;
-  if (
-    rendered.stripHeight - lastOffset > viewportHeight &&
-    lastOffset + snapToLine(effectiveHeight) < rendered.stripHeight
+  for (
+    let cursor = firstPageHeight;
+    cursor < rendered.stripHeight;
+    cursor += continuationHeight
   ) {
-    offsets.push(Math.max(0, rendered.stripHeight - viewportHeight));
+    offsets.push(cursor);
   }
 
   const pagePaths: string[] = [];
@@ -293,12 +312,21 @@ export async function writeZhihuReadingPagePngs(
       outputDirectory,
       `${String(index + 1).padStart(2, "0")}-reading.png`,
     );
-    const topPadding = index === 0 ? PAGE_TOP_PADDING : PAGE_TOP_PADDING;
-    await writeReadingPage(pagePath, rendered, top, topPadding);
+    const sourceHeight =
+      index === 0 ? firstPageHeight : continuationHeight;
+    await writeReadingPage(
+      pagePath,
+      rendered,
+      top,
+      PAGE_TOP_PADDING,
+      sourceHeight,
+    );
     pagePaths.push(pagePath);
   }
 
-  if (!input.tailNote?.trim()) return { ...rendered, pagePaths };
+  if (!input.tailNote?.trim()) {
+    return { ...rendered, pagePaths, pageOffsets: offsets };
+  }
 
   // Replace the last reading page with the tail version so the CTA appears
   // on the final page instead of appending a duplicate-content page.
@@ -307,14 +335,25 @@ export async function writeZhihuReadingPagePngs(
     outputDirectory,
     `${String(pagePaths.length).padStart(2, "0")}-tail.png`,
   );
+  const tailTarget = Math.max(
+    tail.bodyTop,
+    tail.stripHeight - continuationHeight,
+  );
+  const tailTop =
+    tail.bodyTop +
+    Math.ceil((tailTarget - tail.bodyTop) / BODY_LINE_HEIGHT) * BODY_LINE_HEIGHT +
+    PAGE_LINE_BREAK_GUARD;
   await writeReadingPage(
     tailPath,
     tail,
-    Math.max(0, tail.stripHeight - viewportHeight),
+    tailTop,
+    PAGE_TOP_PADDING,
+    continuationHeight,
   );
   pagePaths[pagePaths.length - 1] = tailPath;
+  offsets[offsets.length - 1] = tailTop;
 
-  return { ...tail, pagePaths };
+  return { ...tail, pagePaths, pageOffsets: offsets };
 }
 
 async function writeReadingPage(
@@ -322,10 +361,12 @@ async function writeReadingPage(
   rendered: ScrollPngOutput,
   top: number,
   topPadding = 0,
+  requestedSourceHeight = SCROLL_VIEWPORT_HEIGHT - topPadding,
 ): Promise<void> {
   const availableHeight = SCROLL_VIEWPORT_HEIGHT - topPadding;
   const sourceHeight = Math.min(
     availableHeight,
+    requestedSourceHeight,
     rendered.stripHeight - top,
   );
   const source = await sharp(rendered.stripPath)

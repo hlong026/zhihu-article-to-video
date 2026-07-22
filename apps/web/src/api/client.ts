@@ -747,6 +747,20 @@ export const apiClient = {
       method: "DELETE",
     });
   },
+
+  async abortTask(taskId: string): Promise<boolean> {
+    if (useMockApi) {
+      const task = mockTasks.find((candidate) => candidate.id === taskId);
+      if (!task) throw new Error("任务不存在。");
+      task.status = "aborted" as any;
+      task.step = "aborted" as any;
+      task.progress = 0;
+      task.failureMessage = null;
+      task.updatedAt = new Date().toISOString();
+      return mockDelay(true);
+    }
+    return request<boolean>(`/api/tasks/${taskId}/abort`, { method: "POST" });
+  },
 };
 
 export function isTerminalTaskStatus(status: TaskStatus): boolean {

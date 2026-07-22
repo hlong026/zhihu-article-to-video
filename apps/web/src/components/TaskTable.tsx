@@ -5,11 +5,12 @@ import {
   RotateCw,
   Search,
   Trash2,
+  X,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { ArticleTask, TaskStatus } from "@zhihu-video/contracts";
 
-import { isActiveTaskStatus, isTerminalTaskStatus } from "../api/client";
+import { isActiveTaskStatus, isTerminalTaskStatus, apiClient } from "../api/client";
 import { StatusBadge, statusLabel } from "./StatusBadge";
 
 type StatusFilter = "all" | "active" | "completed" | "failed" | "needs_review";
@@ -67,6 +68,27 @@ function TaskActions({
   onDownload: (task: ArticleTask, asset: "video" | "images") => void;
   onDelete?: (task: ArticleTask) => void;
 }) {
+  if (isActiveTaskStatus(task.status) || task.status === "pending") {
+    return (
+      <div className="table-actions">
+        <button
+          type="button"
+          className="text-button text-button-danger"
+          onClick={async () => {
+            try {
+              await apiClient.abortTask(task.id);
+            } catch {
+              // ignore
+            }
+          }}
+          aria-label={`取消 ${task.fetchedTitle ?? task.inputTitle ?? "任务"}`}
+        >
+          <X size={15} />
+          取消
+        </button>
+      </div>
+    );
+  }
   if (task.status === "completed") {
     return (
       <div className="table-actions">
@@ -117,31 +139,6 @@ function TaskActions({
         >
           <RotateCw size={15} />
           重试
-        </button>
-        {onDelete ? (
-          <button
-            type="button"
-            className="text-button text-button-danger"
-            onClick={() => onDelete(task)}
-            aria-label={`删除 ${task.fetchedTitle ?? task.inputTitle ?? "任务"}`}
-          >
-            <Trash2 size={15} />
-          </button>
-        ) : null}
-      </div>
-    );
-  }
-
-  if (task.status === "pending") {
-    return (
-      <div className="table-actions">
-        <button
-          type="button"
-          className="text-button action-emphasis"
-          onClick={() => onRetry(task)}
-        >
-          <RotateCw size={15} />
-          开始处理
         </button>
         {onDelete ? (
           <button

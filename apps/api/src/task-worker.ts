@@ -21,6 +21,8 @@ export type RerenderTailResult =
   { ok: true } | { ok: false; code: string; message: string };
 
 export class TaskWorker {
+  private readonly abortController = new AbortController();
+
   constructor(
     private readonly repository: TaskRepository,
     private readonly dependencies: {
@@ -49,6 +51,25 @@ export class TaskWorker {
       ffmpegExecutable?: string;
     },
   ) {}
+
+  async stop(): Promise<void> {
+    this.abortController.abort();
+  }
+
+  isAborted(): boolean {
+    return this.abortController.signal.aborted;
+  }
+
+  async abortTask(taskId: string): Promise<boolean> {
+    const task = this.repository.getTask(taskId);
+    if (!task) return false;
+    // Mark as aborted immediately so the UI reflects the state change.
+    this.repository.updateTaskExecution(taskId, {
+      kind: "aborted",
+      message: "任务已被手动取消。",
+    });
+    return true;
+  }
 
   async runBatch(batchId: string): Promise<void> {
     const batch = this.repository.getBatch(batchId);
@@ -83,6 +104,14 @@ export class TaskWorker {
       scrollSpeed: scrollSpeedDefault,
     };
     try {
+      if (this.isAborted()) {
+        this.repository.updateTaskExecution(taskId, {
+          kind: "aborted",
+          message: "任务已被取消。",
+        });
+        return;
+      }
+
       this.repository.reportTaskProgress(taskId, 5, "开始读取文章内容");
       const prepared = await buildPreparedVideo(
         {

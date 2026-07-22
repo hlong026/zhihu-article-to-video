@@ -175,19 +175,21 @@ export function extractInPage(
 
   const paragraphs: string[] = [];
   if (container) {
-    for (const node of Array.from(container.querySelectorAll("p"))) {
+    // Ask the browser for ordinary paragraphs and top-level quotes in one
+    // selector so its document-order result preserves the article's flow.
+    // A quote is extracted as one unit: its nested <p> elements are excluded
+    // to avoid emitting the quote twice, once as a paragraph and once as the
+    // blockquote's full text. Nested quotes are likewise owned by their
+    // outermost quote.
+    for (const node of Array.from(
+      container.querySelectorAll(
+        "p:not(blockquote p), blockquote:not(blockquote blockquote)",
+      ),
+    )) {
       const value = (node?.innerText ?? node?.textContent ?? "")
         .replace(/\s+/g, " ")
         .trim();
       if (value) paragraphs.push(value);
-    }
-    // Blockquotes may contain text outside <p> tags (e.g. bare text nodes
-    // or <span> wrappers). Extract them so quoted content is not lost.
-    for (const bq of Array.from(container.querySelectorAll("blockquote"))) {
-      const value = (bq?.innerText ?? bq?.textContent ?? "")
-        .replace(/\s+/g, " ")
-        .trim();
-      if (value && !paragraphs.includes(value)) paragraphs.push(value);
     }
   }
 

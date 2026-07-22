@@ -149,6 +149,7 @@ export interface BuildAppOptions {
     runBatch(batchId: string): Promise<void>;
     runTask(taskId: string): Promise<void>;
     rerenderTail?(taskId: string): Promise<RerenderTailResult>;
+    abortTask?(taskId: string): Promise<boolean>;
   };
   outputDirectory?: string;
   /** Absolute path of the Chromium executable bundled with the desktop app. */
@@ -388,6 +389,44 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
           .status(404)
           .send({ error: "BATCH_NOT_FOUND", message: "批次不存在" })
       );
+    },
+  );
+
+  // Cancel/stop a task that is currently being processed.
+  app.post<{ Params: { id: string } }>(
+    "/api/tasks/:id/abort",
+    async (request, reply) => {
+      if (!taskWorker) {
+        return reply.status(501).send({
+          error: "NOT_CONFIGURED",
+          message: "任务系统未配置，无法执行操作。",
+        });
+      }
+      const task = repository.getTask(request.params.id);
+      if (!task) {
+        return reply
+          .status(404)
+          .send({ error: "TASK_NOT_FOUND", message: "任务不存在" });
+      }
+      const activeStatuses = [
+        "fetching",
+        "summarizing",
+        "rendering_images",
+        "rendering_video",
+      ];
+      if (!activeStatuses.includes(task.status)) {
+        return reply.status(409).send({
+          error: "TASK_NOT_ACTIVE",
+          message: "当前任务状态不可中断，仅支持处理中的任务。",
+        });
+      }
+      const abortResult = await taskWorker.abortTask?.(request.params.id);
+      return abortResult
+        ? { ok: true }
+        : reply.status(500).send({
+            error: "ABORT_FAILED",
+            message: "终止任务失败，请查看日志详情。",
+          });
     },
   );
 

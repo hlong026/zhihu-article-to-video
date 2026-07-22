@@ -24,11 +24,13 @@ import {
   validateVideoSummary,
   SCROLL_STRIP_WIDTH,
   BOTTOM_BAR_HEIGHT,
+  SCROLL_VIEWPORT_HEIGHT,
   type VideoSummary,
 } from "../index.js";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import sharp from "sharp";
 
 function equal<T>(actual: T, expected: T, message: string): void {
   if (actual !== expected) {
@@ -1278,8 +1280,8 @@ export async function runPipelineTests(): Promise<void> {
   );
   equal(
     stripResult.svg.includes("节选于知乎"),
-    true,
-    "scroll strip should contain the attribution footer",
+    false,
+    "scroll strip must not contain the removed attribution footer",
   );
   equal(
     stripResult.svg.includes("来知乎搜索强化学习可以看到全文"),
@@ -1333,12 +1335,44 @@ export async function runPipelineTests(): Promise<void> {
       1,
       "the horizontal reading sequence should include exactly one tail screenshot",
     );
+    for (const offset of readingPages.pageOffsets.slice(1)) {
+      equal(
+        (offset - readingPages.bodyTop - 16) % 78,
+        0,
+        "every continuation page should start after a full body-text line and its descenders",
+      );
+    }
     const firstPage = await readFile(readingPages.pagePaths[0]!);
     deepEqual(
       [...firstPage.subarray(0, 8)],
       [137, 80, 78, 71, 13, 10, 26, 10],
       "reading-page screenshots should be PNG files",
     );
+    for (const pagePath of readingPages.pagePaths) {
+      const topPixels = await sharp(pagePath)
+        .extract({ left: 0, top: 0, width: 1080, height: 76 })
+        .raw()
+        .toBuffer();
+      equal(
+        [...topPixels].every((pixel) => pixel === 255),
+        true,
+        "every reading page should retain a 60px top margin plus a 16px line-break guard",
+      );
+      const bottomPixels = await sharp(pagePath)
+        .extract({
+          left: 0,
+          top: SCROLL_VIEWPORT_HEIGHT - 60,
+          width: 1080,
+          height: 60,
+        })
+        .raw()
+        .toBuffer();
+      equal(
+        [...bottomPixels].every((pixel) => pixel === 255),
+        true,
+        "every reading page should retain a 60px white bottom margin",
+      );
+    }
   } finally {
     await rm(readingPagesDirectory, { recursive: true, force: true });
   }
