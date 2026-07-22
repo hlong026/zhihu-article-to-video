@@ -1214,20 +1214,20 @@ export async function runPipelineTests(): Promise<void> {
   }
 
   // ─── Scroll speed mapping ───────────────────────────────────────────────
-  equal(scrollSpeedToPixelsPerSecond(1), 80, "speed 1 should map to 80 px/s");
-  equal(scrollSpeedToPixelsPerSecond(2), 120, "speed 2 should map to 120 px/s");
-  equal(scrollSpeedToPixelsPerSecond(3), 160, "speed 3 should map to 160 px/s");
-  equal(scrollSpeedToPixelsPerSecond(4), 200, "speed 4 should map to 200 px/s");
-  equal(scrollSpeedToPixelsPerSecond(5), 240, "speed 5 should map to 240 px/s");
+  equal(scrollSpeedToPixelsPerSecond(1), 40, "speed 1 should map to 40 px/s");
+  equal(scrollSpeedToPixelsPerSecond(2), 60, "speed 2 should map to 60 px/s");
+  equal(scrollSpeedToPixelsPerSecond(3), 80, "speed 3 should map to 80 px/s");
+  equal(scrollSpeedToPixelsPerSecond(4), 100, "speed 4 should map to 100 px/s");
+  equal(scrollSpeedToPixelsPerSecond(5), 120, "speed 5 should map to 120 px/s");
   equal(
     scrollSpeedToPixelsPerSecond(0),
-    80,
-    "speed below 1 should clamp to 80 px/s",
+    40,
+    "speed below 1 should clamp to 40 px/s",
   );
   equal(
     scrollSpeedToPixelsPerSecond(10),
-    240,
-    "speed above 5 should clamp to 240 px/s",
+    120,
+    "speed above 5 should clamp to 120 px/s",
   );
 
   // ─── Zhihu scroll strip rendering ──────────────────────────────────────
