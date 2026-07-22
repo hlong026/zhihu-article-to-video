@@ -226,7 +226,7 @@ export interface ScrollPngOutput {
 }
 
 export interface ReadingPagePngOutput extends ScrollPngOutput {
-  /** Consecutive 9:16 source-page screenshots used by the horizontal mode. */
+  /** Consecutive source-page screenshots, followed by one optional tail page. */
   pagePaths: string[];
 }
 
@@ -267,7 +267,13 @@ export async function writeZhihuReadingPagePngs(
   input: ZhihuScrollRenderInput,
   barMeta: SourcePageMeta | null,
 ): Promise<ReadingPagePngOutput> {
-  const rendered = await writeScrollPngs(outputDirectory, input, barMeta);
+  // Keep the CTA off the reading strip: otherwise a viewport boundary can
+  // expose it on both of the final two screenshots.
+  const rendered = await writeScrollPngs(
+    outputDirectory,
+    { ...input, tailNote: undefined },
+    barMeta,
+  );
   const viewportHeight = SCROLL_VIEWPORT_HEIGHT;
   const maxOffset = Math.max(0, rendered.stripHeight - viewportHeight);
   const offsets = Array.from(
@@ -281,34 +287,59 @@ export async function writeZhihuReadingPagePngs(
       outputDirectory,
       `${String(index + 1).padStart(2, "0")}-reading.png`,
     );
-    const sourceHeight = Math.min(viewportHeight, rendered.stripHeight - top);
-    const source = await sharp(rendered.stripPath)
-      .extract({
-        left: 0,
-        top,
-        width: SCROLL_STRIP_WIDTH,
-        height: sourceHeight,
-      })
-      .png()
-      .toBuffer();
-    await sharp({
-      create: {
-        width: SCROLL_STRIP_WIDTH,
-        height: 1920,
-        channels: 4,
-        background: "#FFFFFF",
-      },
-    })
-      .composite([
-        { input: source, left: 0, top: 0 },
-        { input: rendered.barPath, left: 0, top: SCROLL_VIEWPORT_HEIGHT },
-      ])
-      .png()
-      .toFile(pagePath);
+    await writeReadingPage(pagePath, rendered, top);
     pagePaths.push(pagePath);
   }
 
-  return { ...rendered, pagePaths };
+  if (!input.tailNote?.trim()) return { ...rendered, pagePaths };
+
+  const tail = await writeScrollPngs(outputDirectory, input, barMeta);
+  const tailPath = join(
+    outputDirectory,
+    `${String(pagePaths.length + 1).padStart(2, "0")}-tail.png`,
+  );
+  await writeReadingPage(
+    tailPath,
+    tail,
+    Math.max(0, tail.stripHeight - viewportHeight),
+  );
+  pagePaths.push(tailPath);
+
+  return { ...tail, pagePaths };
+}
+
+async function writeReadingPage(
+  outputPath: string,
+  rendered: ScrollPngOutput,
+  top: number,
+): Promise<void> {
+  const sourceHeight = Math.min(
+    SCROLL_VIEWPORT_HEIGHT,
+    rendered.stripHeight - top,
+  );
+  const source = await sharp(rendered.stripPath)
+    .extract({
+      left: 0,
+      top,
+      width: SCROLL_STRIP_WIDTH,
+      height: sourceHeight,
+    })
+    .png()
+    .toBuffer();
+  await sharp({
+    create: {
+      width: SCROLL_STRIP_WIDTH,
+      height: 1920,
+      channels: 4,
+      background: "#FFFFFF",
+    },
+  })
+    .composite([
+      { input: source, left: 0, top: 0 },
+      { input: rendered.barPath, left: 0, top: SCROLL_VIEWPORT_HEIGHT },
+    ])
+    .png()
+    .toFile(outputPath);
 }
 
 // ─── Internal helpers ────────────────────────────────────────────────────────

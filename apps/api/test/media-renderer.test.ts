@@ -90,7 +90,7 @@ describe("media renderer", () => {
 
       expect(assets.imagePaths.length).toBeGreaterThan(1);
       expect(assets.imagePaths[0]).toMatch(/01-reading\.png$/);
-      expect(assets.imagePaths.at(-1)).toMatch(/reading\.png$/);
+      expect(assets.imagePaths.at(-1)).toMatch(/-tail\.png$/);
       expect(receivedCommand).toMatchObject({ executable: "ffmpeg" });
     } finally {
       await rm(directory, { recursive: true, force: true });

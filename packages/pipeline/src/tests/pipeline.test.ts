@@ -1322,6 +1322,17 @@ export async function runPipelineTests(): Promise<void> {
       true,
       "reading-page screenshots should keep a stable order",
     );
+    equal(
+      readingPages.pagePaths.at(-1)?.endsWith("-tail.png"),
+      true,
+      "the verified keyword should appear only on one dedicated final screenshot",
+    );
+    equal(
+      readingPages.pagePaths.filter((path) => path.endsWith("-tail.png"))
+        .length,
+      1,
+      "the horizontal reading sequence should include exactly one tail screenshot",
+    );
     const firstPage = await readFile(readingPages.pagePaths[0]!);
     deepEqual(
       [...firstPage.subarray(0, 8)],
