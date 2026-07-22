@@ -1462,6 +1462,11 @@ export async function runPipelineTests(): Promise<void> {
     "overlay command should have positive duration",
   );
   equal(
+    overlayCmd.durationSeconds,
+    209.5,
+    "overlay duration should include two-second opening and ending dwells plus exact scroll travel",
+  );
+  equal(
     overlayCmd.args.includes("-loop"),
     true,
     "overlay command should loop the input",
@@ -1478,9 +1483,19 @@ export async function runPipelineTests(): Promise<void> {
     "overlay crop viewport should be 1780px",
   );
   equal(
+    filterArg?.includes("pad=1080:10000:0:0:color=#FFFFFF[padded];[padded]crop=1080:1780"),
+    true,
+    "overlay should retain the source strip in a padded pre-crop canvas",
+  );
+  equal(
     filterArg?.includes("pad=1080:1920"),
     true,
     "overlay should pad the canvas to 1920px height",
+  );
+  equal(
+    filterArg?.includes("(t-2)*40"),
+    true,
+    "overlay crop should wait through the opening dwell before moving",
   );
   const overlayArg = overlayCmd.args.find((a) => a.includes("overlay="));
   equal(
@@ -1497,5 +1512,31 @@ export async function runPipelineTests(): Promise<void> {
     overlayArg?.includes("format=yuv420p"),
     true,
     "overlay output should include format=yuv420p for libx264",
+  );
+
+  const shortOverlayCmd = buildFfmpegScrollOverlayCommand(
+    "/tmp/short-strip.png",
+    720,
+    "/tmp/bar.png",
+    "/tmp/short-video.mp4",
+    3,
+    undefined,
+    { startDwellSeconds: 1.5, endDwellSeconds: 3 },
+  );
+  equal(
+    shortOverlayCmd.durationSeconds,
+    4.5,
+    "a short strip should hold only for the configured start and end dwells",
+  );
+  const shortFilterArg = shortOverlayCmd.args.find((a) => a.includes("crop="));
+  equal(
+    shortFilterArg?.includes("pad=1080:1780:0:0:color=#FFFFFF[padded];[padded]crop=1080:1780"),
+    true,
+    "a short strip must be padded to the reading viewport before it is cropped",
+  );
+  equal(
+    shortFilterArg?.includes("(t-1.5)*80"),
+    true,
+    "custom opening dwell should be reflected in the crop timing",
   );
 }

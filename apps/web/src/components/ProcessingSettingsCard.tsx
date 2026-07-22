@@ -206,7 +206,7 @@ export function ProcessingSettingsCard({
         ) : null}
 
         <div className="processing-field processing-toggle-field">
-          <span className="processing-field-label">全文输出</span>
+          <span className="processing-field-label">长文输出（最多 500 行）</span>
           <button
             type="button"
             role="switch"
@@ -217,8 +217,8 @@ export function ProcessingSettingsCard({
               savePatch(
                 { fullContentOutput: !settings.fullContentOutput },
                 settings.fullContentOutput
-                  ? "已关闭全文输出，超长文章将截取前 10 页。"
-                  : "已开启全文输出，正文将完整呈现（不再截取前 10 页）。",
+                  ? "已关闭长文输出，超长文章将截取前 10 页。"
+                  : "已开启长文输出，最多渲染 500 行正文。",
               )
             }
           >
@@ -226,7 +226,7 @@ export function ProcessingSettingsCard({
           </button>
           <span className="processing-toggle-hint">
             {settings.fullContentOutput
-              ? "正文不限页数，封面 + 全部正文"
+              ? "正文最多 500 行；超出部分以省略号截断"
               : "正文最多 10 页，超出部分以省略号截断"}
           </span>
         </div>

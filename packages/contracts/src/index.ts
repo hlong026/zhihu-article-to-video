@@ -193,7 +193,7 @@ export interface ProcessingSettings {
   coverPageDurationSeconds: number;
   /** Seconds each body page stays on screen (default 3). */
   bodyPageDurationSeconds: number;
-  /** When true, body pagination is uncapped: the full article is rendered. */
+  /** When true, renders extended article output up to the renderer's safety cap. */
   fullContentOutput: boolean;
   /** Video playback mode: "slide" (horizontal page flip) or "scroll" (vertical). */
   videoMode: VideoMode;

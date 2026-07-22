@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { spawn } from "node:child_process";
 
@@ -11,6 +11,7 @@ import {
   writeSummaryPngCards,
   type FfmpegAudioOptions,
   type FfmpegCommand,
+  type ScrollOverlayTimingOptions,
   type SourcePageMeta,
   type VideoSummary,
   type VideoTimingOptions,
@@ -25,7 +26,7 @@ export interface RenderVideoInput {
   keyword: string;
   /** Optional background-music track mixed under the slideshow. */
   audio?: FfmpegAudioOptions;
-  /** Timing options for slide mode (cover + body page durations). */
+  /** Slide timing; for scroll it controls the initial and ending dwell. */
   timing?: VideoTimingOptions;
   /** Video mode: "slide" (default) or "scroll". */
   videoMode?: VideoMode;
@@ -43,13 +44,22 @@ export interface RenderVideoInput {
   cleanedParagraphs?: string[];
   /** Page metadata for the Zhihu-UI scroll strip author block. */
   coverMeta?: SourcePageMeta | null;
-  /** When true, scroll mode renders the full article without line cap. */
+  /** When true, scroll mode uses its extended (safety-capped) article output. */
   fullContentOutput?: boolean;
 }
 
 export interface RenderedVideoAssets {
   imagePaths: string[];
   videoPath: string;
+  durationSeconds: number;
+}
+
+const renderManifestFileName = "render-manifest.json";
+let extendedScrollRenderQueue: Promise<void> = Promise.resolve();
+
+interface RenderManifest {
+  version: 1;
+  /** Duration passed to FFmpeg's `-t`; it is the encoded MP4 duration. */
   durationSeconds: number;
 }
 
@@ -79,12 +89,15 @@ export async function renderVideoAssets(
   // viewport through the very same strip behind its fixed bottom bar.
   if (input.cleanedParagraphs?.length) {
     if (input.videoMode === "scroll") {
-      return renderScrollOverlay(
+      const render = () => renderScrollOverlay(
         input,
         imageDirectory,
         videoPath,
         dependencies,
       );
+      return input.fullContentOutput
+        ? withExtendedScrollRenderSlot(render)
+        : render();
     }
     return renderReadingPageSlides(
       input,
@@ -129,11 +142,13 @@ export async function renderVideoAssets(
     input.ffmpegExecutable,
   );
 
-  return {
+  const assets = {
     imagePaths: cards.map(({ outputPath }) => outputPath),
     videoPath,
     durationSeconds: command.durationSeconds,
   };
+  await writeRenderManifest(input.outputDirectory, assets.durationSeconds);
+  return assets;
 }
 
 /**
@@ -173,6 +188,7 @@ async function renderScrollOverlay(
     videoPath,
     input.scrollSpeed ?? 1,
     input.audio,
+    scrollOverlayTiming(input.timing),
   );
 
   input.onVideoEncodingStart?.();
@@ -181,10 +197,49 @@ async function renderScrollOverlay(
     input.ffmpegExecutable,
   );
 
-  return {
+  const assets = {
     imagePaths: [pngs.stripPath, pngs.barPath],
     videoPath,
     durationSeconds: command.durationSeconds,
+  };
+  await writeRenderManifest(input.outputDirectory, assets.durationSeconds);
+  return assets;
+}
+
+/**
+ * Full-content scrolls rasterize very tall PNGs and can encode for minutes.
+ * Serialize only that expensive media phase; fetching and AI preparation keep
+ * the batch's configured concurrency.
+ */
+async function withExtendedScrollRenderSlot<T>(
+  work: () => Promise<T>,
+): Promise<T> {
+  const previous = extendedScrollRenderQueue;
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  extendedScrollRenderQueue = previous.then(() => current);
+  await previous;
+  try {
+    return await work();
+  } finally {
+    release();
+  }
+}
+
+/**
+ * Reuses the existing timing settings for the scroll experience: cover dwell
+ * lets readers orient before movement, while body dwell becomes the terminal
+ * hold so the CTA cannot flash by. Omit the object to retain pipeline defaults.
+ */
+function scrollOverlayTiming(
+  timing: VideoTimingOptions | undefined,
+): ScrollOverlayTimingOptions | undefined {
+  if (!timing) return undefined;
+  return {
+    startDwellSeconds: timing.coverPageDurationSeconds,
+    endDwellSeconds: timing.bodyPageDurationSeconds,
   };
 }
 
@@ -230,11 +285,29 @@ async function renderReadingPageSlides(
     input.ffmpegExecutable,
   );
 
-  return {
+  const assets = {
     imagePaths: pngs.pagePaths,
     videoPath,
     durationSeconds: command.durationSeconds,
   };
+  await writeRenderManifest(input.outputDirectory, assets.durationSeconds);
+  return assets;
+}
+
+/**
+ * Stores render-time facts next to the media rather than reconstructing them
+ * from PNG count. Scroll videos always have two PNGs regardless of duration.
+ */
+async function writeRenderManifest(
+  outputDirectory: string,
+  durationSeconds: number,
+): Promise<void> {
+  const manifest: RenderManifest = { version: 1, durationSeconds };
+  await writeFile(
+    join(outputDirectory, renderManifestFileName),
+    `${JSON.stringify(manifest)}\n`,
+    "utf8",
+  );
 }
 
 function renderTailNote(
@@ -249,9 +322,9 @@ export async function executeFfmpeg(
   executableOverride?: string,
 ): Promise<void> {
   // Dynamic timeout: 3× the expected video duration (encoding overhead),
-  // with a floor of 2 minutes for short clips and a ceiling of 15 minutes.
+  // with a floor of 2 minutes for short clips and a ceiling of 60 minutes.
   const timeoutMs = Math.min(
-    15 * 60 * 1000,
+    60 * 60 * 1000,
     Math.max(2 * 60 * 1000, command.durationSeconds * 3 * 1000),
   );
   await new Promise<void>((resolve, reject) => {

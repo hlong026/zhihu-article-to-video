@@ -30,9 +30,25 @@ export interface VideoTimingOptions {
   bodyPageDurationSeconds?: number;
 }
 
+/**
+ * Reading pauses surrounding the moving portion of a vertical scroll video.
+ * Both values are expressed in seconds and may be set to zero deliberately.
+ */
+export interface ScrollOverlayTimingOptions {
+  /** Seconds to hold the initial viewport before scrolling (default 2). */
+  startDwellSeconds?: number;
+  /** Seconds to hold the final viewport after scrolling (default 2). */
+  endDwellSeconds?: number;
+}
+
 function clampVolume(volume: number | undefined): number {
   if (volume === undefined || Number.isNaN(volume)) return 0.3;
   return Math.min(1, Math.max(0, volume));
+}
+
+function nonNegativeDuration(value: number | undefined, fallback: number): number {
+  if (value === undefined || !Number.isFinite(value)) return fallback;
+  return Math.max(0, value);
 }
 
 export function durationForCard(
@@ -166,14 +182,24 @@ export function buildFfmpegScrollOverlayCommand(
   outputPath: string,
   scrollSpeed: number,
   audio?: FfmpegAudioOptions,
+  timing?: ScrollOverlayTimingOptions,
 ): FfmpegCommand {
   const viewportHeight = 1780; // 1920 - 140 (bottom bar)
   const pxPerSecond = scrollSpeedToPixelsPerSecond(scrollSpeed);
+  const startDwellSeconds = nonNegativeDuration(
+    timing?.startDwellSeconds,
+    2,
+  );
+  const endDwellSeconds = nonNegativeDuration(timing?.endDwellSeconds, 2);
   const maxScroll = Math.max(0, stripHeight - viewportHeight);
+  const scrollDurationSeconds = maxScroll / pxPerSecond;
+  // Keep only intentional still time at the ends. Rounding the travel time up
+  // used to leave the final viewport frozen for up to one extra second.
   const durationSeconds = Math.max(
     1,
-    maxScroll > 0 ? Math.ceil(maxScroll / pxPerSecond) : 1,
+    startDwellSeconds + scrollDurationSeconds + endDwellSeconds,
   );
+  const paddedStripHeight = Math.max(viewportHeight, stripHeight);
 
   const args = ["-y"];
   args.push("-loop", "1", "-i", stripImagePath);
@@ -182,11 +208,14 @@ export function buildFfmpegScrollOverlayCommand(
     args.push("-stream_loop", "-1", "-i", audio.path);
   }
 
-  // Crop a moving window from the tall strip, pad the canvas to 1920px,
-  // then overlay the fixed bar at the bottom.
-  const cropExpr = `min(t*${pxPerSecond},${maxScroll})`;
+  // Pad before crop so a short content strip can still supply the full reading
+  // viewport. The scroll starts after the opening dwell and reaches maxScroll
+  // exactly when the travel interval ends; the ending dwell owns all final
+  // still time.
+  const cropExpr = `max(0,min((t-${startDwellSeconds})*${pxPerSecond},${maxScroll}))`;
   const videoFilter =
-    `[0:v]crop=1080:${viewportHeight}:0:'${cropExpr}',pad=1080:1920:0:0:color=#FFFFFF[scroll];` +
+    `[0:v]pad=1080:${paddedStripHeight}:0:0:color=#FFFFFF[padded];` +
+    `[padded]crop=1080:${viewportHeight}:0:'${cropExpr}',pad=1080:1920:0:0:color=#FFFFFF[scroll];` +
     `[1:v]format=rgba[bar];` +
     `[scroll][bar]overlay=0:${viewportHeight},format=yuv420p[v]`;
 

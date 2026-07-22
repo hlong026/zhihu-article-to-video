@@ -145,6 +145,7 @@ describe("runBatch worker pool", () => {
 
     expect(maxInFlight).toBe(1);
   });
+
 });
 
 describe("runTask progress reporting", () => {

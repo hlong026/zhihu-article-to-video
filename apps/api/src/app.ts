@@ -1,5 +1,5 @@
 import { createReadStream, existsSync } from "node:fs";
-import { mkdir, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
 
 import multipart from "@fastify/multipart";
@@ -1016,8 +1016,8 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
 
 /**
  * Computes the artifact summary shown in detail panels: rendered card count,
- * whether the video exists, and the total duration implied by the card mix
- * (1s cover + configured body dwell + 2s tail, matching pipeline durationForCard).
+ * whether the video exists, and the duration written by the renderer. Legacy
+ * outputs without a manifest retain the former card-based fallback.
  */
 async function loadTaskArtifacts(
   taskId: string,
@@ -1036,6 +1036,14 @@ async function loadTaskArtifacts(
   ).length;
   const videoReady = existsSync(join(outputDirectory, "video.mp4"));
   if (imageCount === 0 && !videoReady) return null;
+  const persistedDuration = await readPersistedRenderDuration(outputDirectory);
+  if (persistedDuration !== null) {
+    return { imageCount, videoReady, durationSeconds: persistedDuration };
+  }
+
+  // Outputs rendered before render-manifest.json was introduced have no
+  // recorded timing. Keep the best-effort calculation for those artifacts;
+  // all new outputs use the exact encoder duration above.
   const settings = repository.getProcessingSettings();
   const coverDuration = settings.coverPageDurationSeconds;
   const bodyDuration = settings.bodyPageDurationSeconds;
@@ -1047,6 +1055,23 @@ async function loadTaskArtifacts(
         : coverDuration + (imageCount - 1) * bodyDuration
       : 0;
   return { imageCount, videoReady, durationSeconds };
+}
+
+/** Reads a renderer-owned duration manifest, rejecting malformed disk data. */
+async function readPersistedRenderDuration(
+  outputDirectory: string,
+): Promise<number | null> {
+  try {
+    const raw = await readFile(join(outputDirectory, "render-manifest.json"), "utf8");
+    const parsed = JSON.parse(raw) as { durationSeconds?: unknown };
+    return typeof parsed.durationSeconds === "number" &&
+      Number.isFinite(parsed.durationSeconds) &&
+      parsed.durationSeconds > 0
+      ? parsed.durationSeconds
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 /**

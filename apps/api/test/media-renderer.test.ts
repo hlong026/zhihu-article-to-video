@@ -1,4 +1,4 @@
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -36,16 +36,8 @@ describe("media renderer", () => {
 
     try {
       const assets = await renderVideoAssets(
-        {
-          outputDirectory: directory,
-          summary,
-          keyword: "测试口令",
-        },
-        {
-          executeFfmpeg: async (command) => {
-            receivedCommand = command;
-          },
-        },
+        { outputDirectory: directory, summary, keyword: "测试口令" },
+        { executeFfmpeg: async (command) => { receivedCommand = command; } },
       );
 
       expect(assets.imagePaths).toHaveLength(4);
@@ -55,10 +47,9 @@ describe("media renderer", () => {
       });
       expect(assets.videoPath).toBe(join(directory, "video.mp4"));
       expect(assets.durationSeconds).toBe(10);
-      expect(receivedCommand).toMatchObject({
-        executable: "ffmpeg",
-        durationSeconds: 10,
-      });
+      expect(receivedCommand).toMatchObject({ executable: "ffmpeg", durationSeconds: 10 });
+      await expect(readFile(join(directory, "render-manifest.json"), "utf8"))
+        .resolves.toContain('"durationSeconds":10');
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -77,15 +68,10 @@ describe("media renderer", () => {
           videoMode: "slide",
           cleanedParagraphs: Array.from(
             { length: 30 },
-            (_, index) =>
-              `第${index + 1}段原文，模拟知乎阅读页的连续分屏输出。`,
+            (_, index) => `第${index + 1}段原文，模拟知乎阅读页的连续分屏输出。`,
           ),
         },
-        {
-          executeFfmpeg: async (command) => {
-            receivedCommand = command;
-          },
-        },
+        { executeFfmpeg: async (command) => { receivedCommand = command; } },
       );
 
       expect(assets.imagePaths.length).toBeGreaterThan(1);
@@ -94,6 +80,65 @@ describe("media renderer", () => {
       expect(receivedCommand).toMatchObject({ executable: "ffmpeg" });
     } finally {
       await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("maps configured cover and body dwell to scroll start and end holds", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "zhihu-scroll-renderer-"));
+    const received = { command: null as FfmpegCommand | null };
+
+    try {
+      await renderVideoAssets(
+        {
+          outputDirectory: directory,
+          summary,
+          keyword: "测试口令",
+          videoMode: "scroll",
+          cleanedParagraphs: ["A short paragraph verifies the scroll dwell timing."],
+          timing: { coverPageDurationSeconds: 4, bodyPageDurationSeconds: 6 },
+        },
+        { executeFfmpeg: async (command) => { received.command = command; } },
+      );
+
+      expect(received.command).not.toBeNull();
+      if (!received.command) throw new Error("FFmpeg command was not received");
+      const command = received.command;
+      expect(command.args.join(" ")).toContain("t-4");
+      expect(command.durationSeconds).toBeGreaterThanOrEqual(10);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("serializes only the expensive full-content scroll render phase", async () => {
+    const firstDirectory = await mkdtemp(join(tmpdir(), "zhihu-full-scroll-first-"));
+    const secondDirectory = await mkdtemp(join(tmpdir(), "zhihu-full-scroll-second-"));
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const executeFfmpeg = async () => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise<void>((resolve) => setTimeout(resolve, 10));
+      inFlight -= 1;
+    };
+    const input = (outputDirectory: string) => ({
+      outputDirectory,
+      summary,
+      keyword: "测试口令",
+      videoMode: "scroll" as const,
+      fullContentOutput: true,
+      cleanedParagraphs: ["Full-content scroll rendering should enter a shared encode slot."],
+    });
+
+    try {
+      await Promise.all([
+        renderVideoAssets(input(firstDirectory), { executeFfmpeg }),
+        renderVideoAssets(input(secondDirectory), { executeFfmpeg }),
+      ]);
+      expect(maxInFlight).toBe(1);
+    } finally {
+      await rm(firstDirectory, { recursive: true, force: true });
+      await rm(secondDirectory, { recursive: true, force: true });
     }
   });
 });

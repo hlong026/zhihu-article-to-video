@@ -186,4 +186,32 @@ describe("task detail artifacts", () => {
     });
     await app.close();
   });
+
+  it("uses the persisted renderer duration for scroll artifacts", async () => {
+    const app = buildApp({ databasePath, outputDirectory });
+    const taskId = await importTask(app);
+    await markCompleted(taskId, ["scroll-strip.png", "bottom-bar.png"]);
+    await writeFile(
+      join(outputDirectory, taskId, "render-manifest.json"),
+      JSON.stringify({ version: 1, durationSeconds: 143 }),
+    );
+
+    // The current settings must not retroactively change a finished render.
+    await app.inject({
+      method: "PUT",
+      url: "/api/settings/processing",
+      payload: { videoMode: "scroll", scrollSpeed: 5 },
+    });
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/tasks/${taskId}`,
+    });
+
+    expect(response.json().artifacts).toEqual({
+      imageCount: 2,
+      videoReady: true,
+      durationSeconds: 143,
+    });
+    await app.close();
+  });
 });
