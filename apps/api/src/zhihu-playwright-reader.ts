@@ -181,6 +181,14 @@ export function extractInPage(
         .trim();
       if (value) paragraphs.push(value);
     }
+    // Blockquotes may contain text outside <p> tags (e.g. bare text nodes
+    // or <span> wrappers). Extract them so quoted content is not lost.
+    for (const bq of Array.from(container.querySelectorAll("blockquote"))) {
+      const value = (bq?.innerText ?? bq?.textContent ?? "")
+        .replace(/\s+/g, " ")
+        .trim();
+      if (value && !paragraphs.includes(value)) paragraphs.push(value);
+    }
   }
 
   let contentTitle: string | null = null;

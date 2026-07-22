@@ -25,7 +25,7 @@ const BODY_FONT_SIZE = 46;
 const BODY_LINE_HEIGHT = 78;
 const BODY_CHAR_UNITS = 20; // wide-char slots per line (each CJK = 2 units → ~20 chars)
 
-const HEADER_PADDING_TOP = 60;
+const HEADER_PADDING_TOP = 80;
 const TITLE_FONT_SIZE = 54;
 const TITLE_LINE_HEIGHT = 76;
 /** Top padding for reading pages after the first (avoids text touching the edge). */
@@ -34,8 +34,6 @@ const PAGE_TOP_PADDING = 60;
 const AUTHOR_BLOCK_HEIGHT = 160;
 const AUTHOR_PADDING_TOP = 32;
 
-const FOOTER_PADDING = 80;
-const FOOTER_FONT_SIZE = 34;
 /** Keeps the tail prompt in the lower half of the final 9:16 screenshot. */
 const TAIL_NOTE_SECTION_HEIGHT = 720;
 
@@ -69,7 +67,7 @@ export interface ZhihuScrollRenderOutput {
 export function renderZhihuScrollStrip(
   input: ZhihuScrollRenderInput,
 ): ZhihuScrollRenderOutput {
-  const titleLines = wrapText(input.sourceTitle, 17, 6);
+  const titleLines = wrapText(input.sourceTitle, 20, 6);
   const headerHeight =
     HEADER_PADDING_TOP +
     titleLines.length * TITLE_LINE_HEIGHT +
@@ -91,13 +89,10 @@ export function renderZhihuScrollStrip(
 
   const bodyHeight = bodyLines.length * BODY_LINE_HEIGHT + 60;
 
-  // Attribution footer
-  const attribution = buildAttribution(input);
-  const footerHeight = FOOTER_PADDING + FOOTER_FONT_SIZE + FOOTER_PADDING;
   const tailNoteHeight = input.tailNote?.trim() ? TAIL_NOTE_SECTION_HEIGHT : 0;
 
   const totalHeight =
-    headerHeight + authorHeight + bodyHeight + footerHeight + tailNoteHeight;
+    headerHeight + authorHeight + bodyHeight + tailNoteHeight;
 
   // ─── Build SVG ───────────────────────────────────────────────────────────
   const parts: string[] = [
@@ -144,12 +139,6 @@ export function renderZhihuScrollStrip(
   // Body text
   parts.push(renderBodyLines(bodyLines, y));
   y += bodyHeight;
-
-  // Attribution footer
-  parts.push(
-    `<text x="${CONTENT_LEFT}" y="${y + FOOTER_PADDING}" fill="#999999" font-size="${FOOTER_FONT_SIZE}">${escapeSvg(attribution)}</text>`,
-  );
-  y += footerHeight;
 
   if (input.tailNote?.trim()) {
     parts.push(renderTailNote(input.tailNote, y));
@@ -304,7 +293,8 @@ export async function writeZhihuReadingPagePngs(
       outputDirectory,
       `${String(index + 1).padStart(2, "0")}-reading.png`,
     );
-    await writeReadingPage(pagePath, rendered, top, index === 0 ? 0 : PAGE_TOP_PADDING);
+    const topPadding = index === 0 ? PAGE_TOP_PADDING : PAGE_TOP_PADDING;
+    await writeReadingPage(pagePath, rendered, top, topPadding);
     pagePaths.push(pagePath);
   }
 
@@ -372,13 +362,6 @@ function buildMetaLine(meta: SourcePageMeta | null): string {
   if (meta?.followCount?.trim())
     segments.push(`${meta.followCount.trim()} 个关注`);
   return segments.length > 0 ? segments.join(" · ") : "知乎";
-}
-
-function buildAttribution(input: ZhihuScrollRenderInput): string {
-  const template =
-    input.attributionTemplate ?? "内容较长，节选于知乎【{title}】";
-  const shortTitle = Array.from(input.sourceTitle).slice(0, 12).join("");
-  return template.replace("{title}", shortTitle);
 }
 
 function renderAuthorBlock(meta: SourcePageMeta, top: number): string {
