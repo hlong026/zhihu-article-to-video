@@ -234,13 +234,13 @@ export function buildFfmpegScrollOverlayCommand(
 }
 
 /**
- * Maps scroll speed (1~5) to vertical pixels per second. Speed 1 (default)
- * scrolls at 80 px/s for comfortable reading; each step adds 40 px/s
- * (80 / 120 / 160 / 200 / 240).
+ * Maps scroll speed (1~5) to vertical pixels per second. Standard speed 3
+ * scrolls at 80 px/s for comfortable reading; each step adds 20 px/s
+ * (40 / 60 / 80 / 100 / 120).
  */
 export function scrollSpeedToPixelsPerSecond(speed: number): number {
   const clamped = Math.max(1, Math.min(5, Math.round(speed)));
-  return 40 + clamped * 40;
+  return 20 + clamped * 20;
 }
 
 /**

@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
+import { scrollSpeedDefault } from "@zhihu-video/contracts";
 import {
   buildPreparedVideo,
   paginateParagraphs,
@@ -17,8 +18,7 @@ import { renderVideoAssets } from "./media-renderer.js";
 import { TaskRepository } from "./repository.js";
 
 export type RerenderTailResult =
-  | { ok: true }
-  | { ok: false; code: string; message: string };
+  { ok: true } | { ok: false; code: string; message: string };
 
 export class TaskWorker {
   constructor(
@@ -80,7 +80,7 @@ export class TaskWorker {
       bodyPageDurationSeconds: 3,
       fullContentOutput: false,
       videoMode: "slide" as const,
-      scrollSpeed: 1,
+      scrollSpeed: scrollSpeedDefault,
     };
     try {
       this.repository.reportTaskProgress(taskId, 5, "开始读取文章内容");
@@ -211,13 +211,14 @@ export class TaskWorker {
       bodyPageDurationSeconds: 3,
       fullContentOutput: false,
       videoMode: "slide" as const,
-      scrollSpeed: 1,
+      scrollSpeed: scrollSpeedDefault,
     };
     const content: {
       title: string;
       paragraphs: string[];
       meta?: SourcePageMeta | null;
-    } | null = task.manualContent ?? (await readSnapshotContent(outputDirectory));
+    } | null =
+      task.manualContent ?? (await readSnapshotContent(outputDirectory));
     if (!content) {
       return {
         ok: false,
@@ -348,5 +349,7 @@ function parseSnapshotMeta(value: unknown): SourcePageMeta | null {
     followCount: read("followCount"),
     avatarDataUri: read("avatarDataUri"),
   };
-  return meta.authorName ?? meta.answerCount ?? meta.followCount ? meta : null;
+  return (meta.authorName ?? meta.answerCount ?? meta.followCount)
+    ? meta
+    : null;
 }

@@ -6,6 +6,7 @@ import {
   buildFfmpegScrollCommand,
   buildFfmpegScrollOverlayCommand,
   buildFfmpegVideoCommand,
+  writeZhihuReadingPagePngs,
   writeScrollPngs,
   writeSummaryPngCards,
   type FfmpegAudioOptions,
@@ -54,7 +55,10 @@ export interface RenderedVideoAssets {
 
 export interface MediaRendererDependencies {
   writeCards?: typeof writeSummaryPngCards;
-  executeFfmpeg?: (command: FfmpegCommand, executableOverride?: string) => Promise<void>;
+  executeFfmpeg?: (
+    command: FfmpegCommand,
+    executableOverride?: string,
+  ) => Promise<void>;
 }
 
 /**
@@ -70,9 +74,24 @@ export async function renderVideoAssets(
   const videoPath = join(input.outputDirectory, "video.mp4");
   await mkdir(input.outputDirectory, { recursive: true });
 
-  // ─── Scroll mode: Zhihu-UI continuous strip + fixed bottom bar ───────────
-  if (input.videoMode === "scroll" && input.cleanedParagraphs?.length) {
-    return renderScrollOverlay(input, imageDirectory, videoPath, dependencies);
+  // Both reference modes use the same Zhihu reading-page artwork. The
+  // horizontal reference changes pages with hard cuts; vertical mode moves a
+  // viewport through the very same strip behind its fixed bottom bar.
+  if (input.cleanedParagraphs?.length) {
+    if (input.videoMode === "scroll") {
+      return renderScrollOverlay(
+        input,
+        imageDirectory,
+        videoPath,
+        dependencies,
+      );
+    }
+    return renderReadingPageSlides(
+      input,
+      imageDirectory,
+      videoPath,
+      dependencies,
+    );
   }
 
   // ─── Slide mode (default): paginated cards ───────────────────────────────
@@ -105,7 +124,10 @@ export async function renderVideoAssets(
         );
 
   input.onVideoEncodingStart?.();
-  await (dependencies.executeFfmpeg ?? executeFfmpeg)(command, input.ffmpegExecutable);
+  await (dependencies.executeFfmpeg ?? executeFfmpeg)(
+    command,
+    input.ffmpegExecutable,
+  );
 
   return {
     imagePaths: cards.map(({ outputPath }) => outputPath),
@@ -137,6 +159,7 @@ async function renderScrollOverlay(
       meta: barMeta,
       tags: input.summary.tags,
       fullContentOutput: input.fullContentOutput ?? false,
+      tailNote: renderTailNote(input),
     },
     barMeta,
   );
@@ -153,7 +176,10 @@ async function renderScrollOverlay(
   );
 
   input.onVideoEncodingStart?.();
-  await (dependencies.executeFfmpeg ?? executeFfmpeg)(command, input.ffmpegExecutable);
+  await (dependencies.executeFfmpeg ?? executeFfmpeg)(
+    command,
+    input.ffmpegExecutable,
+  );
 
   return {
     imagePaths: [pngs.stripPath, pngs.barPath],
@@ -162,15 +188,75 @@ async function renderScrollOverlay(
   };
 }
 
+/** Creates hard-cut reading-page screenshots matching the local reference. */
+async function renderReadingPageSlides(
+  input: RenderVideoInput,
+  imageDirectory: string,
+  videoPath: string,
+  dependencies: MediaRendererDependencies,
+): Promise<RenderedVideoAssets> {
+  await mkdir(imageDirectory, { recursive: true });
+  input.onImageProgress?.(0, 1);
+
+  const barMeta = input.coverMeta ?? input.summary.coverMeta ?? null;
+  const pngs = await writeZhihuReadingPagePngs(
+    imageDirectory,
+    {
+      sourceTitle: input.summary.sourceTitle,
+      paragraphs: input.cleanedParagraphs!,
+      meta: barMeta,
+      tags: input.summary.tags,
+      fullContentOutput: input.fullContentOutput ?? false,
+      tailNote: renderTailNote(input),
+    },
+    barMeta,
+  );
+  input.onImageProgress?.(pngs.pagePaths.length, pngs.pagePaths.length);
+
+  const cards = pngs.pagePaths.map((_, index) => ({
+    kind: index === 0 ? ("cover" as const) : ("body" as const),
+  }));
+  const command = buildFfmpegVideoCommand(
+    cards,
+    pngs.pagePaths,
+    videoPath,
+    input.audio,
+    input.timing,
+  );
+
+  input.onVideoEncodingStart?.();
+  await (dependencies.executeFfmpeg ?? executeFfmpeg)(
+    command,
+    input.ffmpegExecutable,
+  );
+
+  return {
+    imagePaths: pngs.pagePaths,
+    videoPath,
+    durationSeconds: command.durationSeconds,
+  };
+}
+
+function renderTailNote(
+  input: Pick<RenderVideoInput, "keyword" | "tailTemplate">,
+): string {
+  const template = input.tailTemplate ?? "来知乎搜索🔍{文章口令}可以看到全文";
+  return template.replaceAll("{文章口令}", input.keyword.trim());
+}
+
 export async function executeFfmpeg(
   command: FfmpegCommand,
   executableOverride?: string,
 ): Promise<void> {
   const timeoutMs = 2 * 60 * 1000;
   await new Promise<void>((resolve, reject) => {
-    const process = spawn(executableOverride ?? command.executable, command.args, {
-      stdio: ["ignore", "ignore", "pipe"],
-    });
+    const process = spawn(
+      executableOverride ?? command.executable,
+      command.args,
+      {
+        stdio: ["ignore", "ignore", "pipe"],
+      },
+    );
     let stderr = "";
     const timeout = setTimeout(() => {
       process.kill("SIGTERM");

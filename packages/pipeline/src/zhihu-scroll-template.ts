@@ -34,6 +34,8 @@ const AUTHOR_PADDING_TOP = 32;
 
 const FOOTER_PADDING = 80;
 const FOOTER_FONT_SIZE = 34;
+/** Keeps the tail prompt in the lower half of the final 9:16 screenshot. */
+const TAIL_NOTE_SECTION_HEIGHT = 720;
 
 /** Maximum body lines when fullContentOutput is off (~3000 chars). */
 const MAX_BODY_LINES_CAPPED = 120;
@@ -50,6 +52,8 @@ export interface ZhihuScrollRenderInput {
   fullContentOutput: boolean;
   /** Attribution template; {title} is interpolated. */
   attributionTemplate?: string;
+  /** Verified search prompt overlaid above the bottom bar on the final page. */
+  tailNote?: string;
 }
 
 export interface ZhihuScrollRenderOutput {
@@ -78,9 +82,7 @@ export function renderZhihuScrollStrip(
     ? MAX_BODY_LINES_FULL
     : MAX_BODY_LINES_CAPPED;
   const truncated = allBodyLines.length > maxLines;
-  const bodyLines = truncated
-    ? allBodyLines.slice(0, maxLines)
-    : allBodyLines;
+  const bodyLines = truncated ? allBodyLines.slice(0, maxLines) : allBodyLines;
   if (truncated && bodyLines.length > 0) {
     bodyLines[bodyLines.length - 1] = bodyLines[bodyLines.length - 1] + "……";
   }
@@ -90,9 +92,10 @@ export function renderZhihuScrollStrip(
   // Attribution footer
   const attribution = buildAttribution(input);
   const footerHeight = FOOTER_PADDING + FOOTER_FONT_SIZE + FOOTER_PADDING;
+  const tailNoteHeight = input.tailNote?.trim() ? TAIL_NOTE_SECTION_HEIGHT : 0;
 
   const totalHeight =
-    headerHeight + authorHeight + bodyHeight + footerHeight;
+    headerHeight + authorHeight + bodyHeight + footerHeight + tailNoteHeight;
 
   // ─── Build SVG ───────────────────────────────────────────────────────────
   const parts: string[] = [
@@ -137,15 +140,18 @@ export function renderZhihuScrollStrip(
   y += 30;
 
   // Body text
-  parts.push(
-    renderBodyLines(bodyLines, y),
-  );
+  parts.push(renderBodyLines(bodyLines, y));
   y += bodyHeight;
 
   // Attribution footer
   parts.push(
     `<text x="${CONTENT_LEFT}" y="${y + FOOTER_PADDING}" fill="#999999" font-size="${FOOTER_FONT_SIZE}">${escapeSvg(attribution)}</text>`,
   );
+  y += footerHeight;
+
+  if (input.tailNote?.trim()) {
+    parts.push(renderTailNote(input.tailNote, y));
+  }
 
   parts.push("</svg>");
 
@@ -219,6 +225,11 @@ export interface ScrollPngOutput {
   stripHeight: number;
 }
 
+export interface ReadingPagePngOutput extends ScrollPngOutput {
+  /** Consecutive source-page screenshots, followed by one optional tail page. */
+  pagePaths: string[];
+}
+
 /**
  * Renders the scroll strip and bottom bar as PNG files in the given directory.
  */
@@ -246,12 +257,99 @@ export async function writeScrollPngs(
   return { stripPath, barPath, stripHeight: strip.height };
 }
 
+/**
+ * Splits the same Zhihu reading strip into full-phone screenshots. This is
+ * intentionally a hard-cut sequence: the supplied horizontal reference is a
+ * viewer swiping between screenshots, rather than a fake pan animation.
+ */
+export async function writeZhihuReadingPagePngs(
+  outputDirectory: string,
+  input: ZhihuScrollRenderInput,
+  barMeta: SourcePageMeta | null,
+): Promise<ReadingPagePngOutput> {
+  // Keep the CTA off the reading strip: otherwise a viewport boundary can
+  // expose it on both of the final two screenshots.
+  const rendered = await writeScrollPngs(
+    outputDirectory,
+    { ...input, tailNote: undefined },
+    barMeta,
+  );
+  const viewportHeight = SCROLL_VIEWPORT_HEIGHT;
+  const maxOffset = Math.max(0, rendered.stripHeight - viewportHeight);
+  const offsets = Array.from(
+    { length: Math.max(1, Math.ceil(maxOffset / viewportHeight) + 1) },
+    (_, index) => Math.min(index * viewportHeight, maxOffset),
+  ).filter((offset, index, all) => index === 0 || offset !== all[index - 1]);
+
+  const pagePaths: string[] = [];
+  for (const [index, top] of offsets.entries()) {
+    const pagePath = join(
+      outputDirectory,
+      `${String(index + 1).padStart(2, "0")}-reading.png`,
+    );
+    await writeReadingPage(pagePath, rendered, top);
+    pagePaths.push(pagePath);
+  }
+
+  if (!input.tailNote?.trim()) return { ...rendered, pagePaths };
+
+  const tail = await writeScrollPngs(outputDirectory, input, barMeta);
+  const tailPath = join(
+    outputDirectory,
+    `${String(pagePaths.length + 1).padStart(2, "0")}-tail.png`,
+  );
+  await writeReadingPage(
+    tailPath,
+    tail,
+    Math.max(0, tail.stripHeight - viewportHeight),
+  );
+  pagePaths.push(tailPath);
+
+  return { ...tail, pagePaths };
+}
+
+async function writeReadingPage(
+  outputPath: string,
+  rendered: ScrollPngOutput,
+  top: number,
+): Promise<void> {
+  const sourceHeight = Math.min(
+    SCROLL_VIEWPORT_HEIGHT,
+    rendered.stripHeight - top,
+  );
+  const source = await sharp(rendered.stripPath)
+    .extract({
+      left: 0,
+      top,
+      width: SCROLL_STRIP_WIDTH,
+      height: sourceHeight,
+    })
+    .png()
+    .toBuffer();
+  await sharp({
+    create: {
+      width: SCROLL_STRIP_WIDTH,
+      height: 1920,
+      channels: 4,
+      background: "#FFFFFF",
+    },
+  })
+    .composite([
+      { input: source, left: 0, top: 0 },
+      { input: rendered.barPath, left: 0, top: SCROLL_VIEWPORT_HEIGHT },
+    ])
+    .png()
+    .toFile(outputPath);
+}
+
 // ─── Internal helpers ────────────────────────────────────────────────────────
 
 function buildMetaLine(meta: SourcePageMeta | null): string {
   const segments: string[] = [];
-  if (meta?.answerCount?.trim()) segments.push(`${meta.answerCount.trim()} 个回答`);
-  if (meta?.followCount?.trim()) segments.push(`${meta.followCount.trim()} 个关注`);
+  if (meta?.answerCount?.trim())
+    segments.push(`${meta.answerCount.trim()} 个回答`);
+  if (meta?.followCount?.trim())
+    segments.push(`${meta.followCount.trim()} 个关注`);
   return segments.length > 0 ? segments.join(" · ") : "知乎";
 }
 
@@ -282,7 +380,9 @@ function renderAuthorBlock(meta: SourcePageMeta, top: number): string {
   }
 
   const textX = CONTENT_LEFT + avatarR * 2 + 24;
-  const name = Array.from(meta.authorName?.trim() ?? "").slice(0, 14).join("");
+  const name = Array.from(meta.authorName?.trim() ?? "")
+    .slice(0, 14)
+    .join("");
   parts.push(
     `<text x="${textX}" y="${top + AUTHOR_PADDING_TOP + 34}" fill="#111111" font-size="36" font-weight="600">${escapeSvg(name)}</text>`,
   );
@@ -325,9 +425,40 @@ function renderBodyLines(lines: string[], top: number): string {
   return `<text x="${CONTENT_LEFT}" y="${top + BODY_LINE_HEIGHT}" fill="#1A1A1A" font-size="${BODY_FONT_SIZE}" font-weight="400">${spans.join("")}</text>`;
 }
 
+/**
+ * The local reference keeps the final source-page screenshot visible and
+ * places a bold orange search prompt above the fixed interaction bar.
+ */
+function renderTailNote(note: string, top: number): string {
+  const displayNote = note.trim().replaceAll("🔍", "");
+  const lines = wrapText(displayNote, 13, 3);
+  const lineHeight = 78;
+  const baseline = top + 82;
+  const spans = lines
+    .map((line, index) => {
+      const dy = index === 0 ? 0 : lineHeight;
+      return `<tspan x="${CONTENT_LEFT}" dy="${dy}">${escapeSvg(line)}</tspan>`;
+    })
+    .join("");
+
+  return [
+    `<g aria-label="${escapeSvg(displayNote)}">`,
+    `<rect x="${CONTENT_LEFT - 16}" y="${top + 12}" width="${CONTENT_WIDTH - 40}" height="${Math.max(148, lines.length * lineHeight + 46)}" rx="16" fill="#FFF4EF"/>`,
+    `<text x="${CONTENT_LEFT}" y="${baseline}" fill="#F04B2F" font-size="64" font-weight="800" transform="rotate(-3 ${CONTENT_LEFT} ${baseline})">${spans}</text>`,
+    "</g>",
+  ].join("");
+}
+
 function renderMultiLine(
   lines: string[],
-  opts: { x: number; y: number; fontSize: number; lineHeight: number; fill: string; weight: number },
+  opts: {
+    x: number;
+    y: number;
+    fontSize: number;
+    lineHeight: number;
+    fill: string;
+    weight: number;
+  },
 ): string {
   const spans = lines.map((line, i) => {
     const dy = i === 0 ? 0 : opts.lineHeight;

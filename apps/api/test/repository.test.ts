@@ -27,9 +27,7 @@ function taskInput(overrides: Partial<ImportTaskInput> = {}): ImportTaskInput {
 
 describe("renderTailNote", () => {
   it("locks the template around the verified keyword", () => {
-    expect(renderTailNote("三个方法")).toBe(
-      "来知乎搜索🔍三个方法可以看到全文",
-    );
+    expect(renderTailNote("三个方法")).toBe("来知乎搜索🔍三个方法可以看到全文");
   });
 
   it("falls back to a placeholder when the keyword is missing", () => {
@@ -101,6 +99,7 @@ describe("processing settings", () => {
       DEFAULT_PROCESSING_SETTINGS,
     );
     expect(repository.getProcessingSettings().concurrency).toBe(5);
+    expect(repository.getProcessingSettings().scrollSpeed).toBe(3);
   });
 
   it("persists an allowed preset and reads it back", () => {
@@ -167,10 +166,9 @@ describe("processing settings", () => {
     insert.run("processing", JSON.stringify({ concurrency: 42 }), "now");
     expect(repository.getProcessingSettings().concurrency).toBe(5);
 
-    database.prepare("UPDATE app_settings SET value = ? WHERE key = ?").run(
-      "not-json",
-      "processing",
-    );
+    database
+      .prepare("UPDATE app_settings SET value = ? WHERE key = ?")
+      .run("not-json", "processing");
     expect(repository.getProcessingSettings().concurrency).toBe(5);
   });
 });

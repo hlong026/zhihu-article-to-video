@@ -188,6 +188,7 @@ describe("runTask progress reporting", () => {
     expect(task.status).toBe("completed");
     expect(task.progress).toBe(100);
     expect(task.finalTitle).toBe("视频标题");
+    expect(renderVideoAssetsMock.mock.calls[0]![0].scrollSpeed).toBe(3);
     // 5 → 35 → per-card 60/70 → encoding 80 → wrap-up 95, then the
     // completed transition pins the stored progress to 100.
     expect(progressRecords).toEqual([5, 35, 60, 70, 80, 95]);
@@ -275,7 +276,10 @@ describe("rerenderTail", () => {
     );
     const task = batch.tasks[0]!;
     expect(task.status).toBe("needs_review");
-    repository.editTask(task.id, { finalTitle: "保留标题", finalTags: ["知乎"] });
+    repository.editTask(task.id, {
+      finalTitle: "保留标题",
+      finalTags: ["知乎"],
+    });
     repository.saveManualContent(task.id, {
       title: "人工标题",
       paragraphs: [longParagraph],

@@ -176,10 +176,10 @@ export const bodyPageDurationOptions = [3, 4, 5, 6] as const;
 /** Video playback mode: horizontal slide (page-by-page) or vertical scroll. */
 export type VideoMode = "slide" | "scroll";
 
-/** Scroll speed range for vertical-scroll mode (1=slowest, 5=fastest). */
+/** Scroll speed range for vertical-scroll mode (1=slowest, 5=fastest; 3=standard). */
 export const scrollSpeedMin = 1;
 export const scrollSpeedMax = 5;
-export const scrollSpeedDefault = 1;
+export const scrollSpeedDefault = 3;
 
 /**
  * Global batch-processing configuration (single operator, one row). The
