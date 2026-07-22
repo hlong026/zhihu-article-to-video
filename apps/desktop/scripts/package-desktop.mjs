@@ -51,18 +51,18 @@ const SQLITE_PREBUILD_RELEASE = "12.12.0";
  * 保底（browser-resolver 探测链的最后一环）。版本随 api 依赖的
  * playwright-core（browsers.json 修订号），下载产物缓存在
  * .stage/playwright-browsers，重复打包不重复下载。
+ * Playwright 1.49+ 的 chromium 实为 Chrome for Testing，交叉打包时
+ * 必须按 browsers.json 的 browserVersion 下载对应平台产物。
  */
 const PLAYWRIGHT_DOWNLOAD_HOST =
-  process.env.PLAYWRIGHT_DOWNLOAD_HOST ??
-  "https://cdn.playwright.dev/dbazure/download/playwright";
+  process.env.PLAYWRIGHT_DOWNLOAD_HOST ?? "https://cdn.playwright.dev";
 
-// 交叉打包直下载时各目标的 CDN 压缩包名。
-const CHROMIUM_ARCHIVE_NAME = {
-  "win32-x64": "chromium-win64.zip",
-  "darwin-x64": "chromium-mac.zip",
-  "darwin-arm64": "chromium-mac-arm64.zip",
-  "linux-x64": "chromium-linux.zip",
-  "linux-arm64": "chromium-linux-arm64.zip",
+// 交叉打包直下载时各目标在 Chrome for Testing CDN 的相对路径。
+const CHROMIUM_ARCHIVE_PATH = {
+  "win32-x64": "win64/chrome-win64.zip",
+  "darwin-x64": "mac-x64/chrome-mac-x64.zip",
+  "darwin-arm64": "mac-arm64/chrome-mac-arm64.zip",
+  "linux-x64": "linux64/chrome-linux64.zip",
 };
 
 /**
@@ -728,11 +728,16 @@ async function chromiumRevision() {
     throw new Error("playwright-core browsers.json 中缺少 chromium 定义。");
   }
   const overrides = chromium.revisionOverrides ?? {};
-  return (
-    overrides[`${targetPlatform}-${targetArch}`] ??
-    overrides[targetPlatform] ??
-    chromium.revision
-  );
+  if (!chromium.browserVersion) {
+    throw new Error("playwright-core browsers.json 中缺少 chromium browserVersion。");
+  }
+  return {
+    revision:
+      overrides[`${targetPlatform}-${targetArch}`] ??
+      overrides[targetPlatform] ??
+      chromium.revision,
+    browserVersion: chromium.browserVersion,
+  };
 }
 
 /**
@@ -740,7 +745,7 @@ async function chromiumRevision() {
  * 返回浏览器目录与清单用的相对可执行路径。
  */
 async function ensurePlaywrightChromium() {
-  const revision = await chromiumRevision();
+  const { revision, browserVersion } = await chromiumRevision();
   const browserDirectoryName = `chromium-${revision}`;
   const cacheDirectory = join(
     stageRoot,
@@ -760,7 +765,7 @@ async function ensurePlaywrightChromium() {
     if (targetPlatform === process.platform && targetArch === process.arch) {
       await installChromiumViaPlaywrightCli(cacheDirectory);
     } else {
-      await downloadChromiumArchive(revision, browserDirectory);
+      await downloadChromiumArchive(browserVersion, browserDirectory);
       await writeFile(completionMarker, "");
     }
   }
@@ -839,31 +844,31 @@ async function installChromiumViaPlaywrightCli(browsersPath) {
 }
 
 /** 交叉打包（macOS → Windows）：直接拉取 Playwright CDN 压缩包解压。 */
-async function downloadChromiumArchive(revision, targetDirectory) {
-  const archiveName = CHROMIUM_ARCHIVE_NAME[`${targetPlatform}-${targetArch}`];
-  if (!archiveName) {
+async function downloadChromiumArchive(browserVersion, targetDirectory) {
+  const archivePath = CHROMIUM_ARCHIVE_PATH[`${targetPlatform}-${targetArch}`];
+  if (!archivePath) {
     throw new Error(
       `缺少 ${targetPlatform}-${targetArch} 的 Chromium 压缩包映射。`,
     );
   }
-  const url = `${PLAYWRIGHT_DOWNLOAD_HOST}/builds/chromium/${revision}/${archiveName}`;
-  const archivePath = join(stageRoot, archiveName);
-  console.log(`下载 Playwright Chromium r${revision}（${archiveName}）…`);
+  const url = `${PLAYWRIGHT_DOWNLOAD_HOST}/builds/cft/${browserVersion}/${archivePath}`;
+  const archiveFile = join(stageRoot, archivePath.split("/").at(-1));
+  console.log(`下载 Chrome for Testing ${browserVersion}（${archivePath}）…`);
   const response = await fetch(url);
   if (!response.ok) {
     throw new Error(`下载 Chromium 失败（${response.status}）：${url}`);
   }
-  await writeFile(archivePath, Buffer.from(await response.arrayBuffer()));
+  await writeFile(archiveFile, Buffer.from(await response.arrayBuffer()));
   if (process.platform === "darwin") {
-    await run("ditto", ["-x", "-k", archivePath, targetDirectory]);
+    await run("ditto", ["-x", "-k", archiveFile, targetDirectory]);
   } else {
     await run("powershell", [
       "-NoProfile",
       "-Command",
-      `Expand-Archive -LiteralPath '${archivePath}' -DestinationPath '${targetDirectory}'`,
+      `Expand-Archive -LiteralPath '${archiveFile}' -DestinationPath '${targetDirectory}'`,
     ]);
   }
-  await rm(archivePath, { force: true });
+  await rm(archiveFile, { force: true });
 }
 
 /** 将 Chromium 拷入应用包并生成 manifest（主进程据此解析可执行文件路径）。 */

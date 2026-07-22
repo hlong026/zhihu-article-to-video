@@ -25,9 +25,9 @@ pnpm monorepo，四层结构，依赖方向自上而下：
 
 - `packages/contracts`：前后端共享的 TypeScript 类型（任务状态、批次、AI 摘要结构），无运行时逻辑。
 - `packages/pipeline`：纯函数内容流水线，**刻意不依赖浏览器、HTTP 客户端与凭证**。包含 URL 分类（`source.ts` 的 `classifyZhihuUrl`）、正文清洗（`cleanReadableContent`）、AI 摘要结构校验（`summary.ts` 的 `validateVideoSummary`）、卡片序列构建（`cards.ts`）、SVG 卡片模板（`svg.ts`）、FFmpeg 命令构建（`ffmpeg.ts`）。外部能力通过接口注入：`ZhihuContentReader`（内容读取）与 `SummaryGenerator`（AI 摘要）。
-- `apps/api`：Fastify + better-sqlite3 任务服务。`app.ts` 装配 HTTP API；`importer.ts` 解析 Excel；`repository.ts` 持久化批次/任务/步骤日志；`task-worker.ts` 串行执行任务；`zhihu-reader.ts`、`openai-summary.ts`、`media-renderer.ts` 是 pipeline 注入接口的具体适配器。任务状态机：`pending → fetching → summarizing → rendering_images → rendering_video → completed`，任意步骤可转 `failed`/`needs_review`；重试从记录的步骤恢复，不重复上游步骤。
+- `apps/api`：Fastify + better-sqlite3 任务服务。`app.ts` 装配 HTTP API；`importer.ts` 解析 Excel；`repository.ts` 持久化批次/任务/步骤日志；`task-worker.ts` 串行执行任务；`zhihu-playwright-reader.ts`、`openai-summary.ts`、`media-renderer.ts` 是 pipeline 注入接口的具体适配器。任务状态机：`pending → fetching → summarizing → rendering_images → rendering_video → completed`，任意步骤可转 `failed`/`needs_review`；重试从记录的步骤恢复，不重复上游步骤。浏览器由 `browser-resolver.ts` 按链探测：显式 executablePath → 显式 channel → 本机 Chrome → 本机 Edge → 内置 Chromium → Playwright 默认。
 - `apps/web`：React 19 + Vite 工作台，仅"工作台"与"任务记录"两个页面。不得出现登录、用户管理、设置、模板中心、套餐/算力等入口。
-- `apps/desktop`：Electron 主进程 + 受限 Preload。安全基线：`contextIsolation: true`、`nodeIntegration: false`、`sandbox: true`，页面只能通过白名单 IPC（`desktop:*` channel）访问能力；生产环境页面加载本地构建产物，不暴露本机 HTTP 管理接口。
+- `apps/desktop`：Electron 主进程 + 受限 Preload。安全基线：`contextIsolation: true`、`nodeIntegration: false`、`sandbox: true`，页面只能通过白名单 IPC（`desktop:*` channel）访问能力；生产环境页面加载本地构建产物，不暴露本机 HTTP 管理接口。打包脚本会内置 Chrome for Testing（`resources/app/api/playwright-browsers/`，含 manifest.json）作为无本机浏览器时的保底。
 
 关键数据流：`POST /api/batches/import`（Excel）→ 批次/任务入库 → `POST /api/batches/:id/start` → `TaskWorker.runTask` → `buildPreparedVideo`（读内容 → AI 摘要 → 校验，唯一决定任务可否渲染的地方）→ `renderVideoAssets`（SVG→1080×1440 PNG→FFmpeg H.264 MP4）→ 产物写入 `outputs/{batchId}/{taskId}/`。
 
