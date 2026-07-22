@@ -28,6 +28,8 @@ const BODY_CHAR_UNITS = 20; // wide-char slots per line (each CJK = 2 units → 
 const HEADER_PADDING_TOP = 80;
 const TITLE_FONT_SIZE = 54;
 const TITLE_LINE_HEIGHT = 76;
+// 17 × 54px ≈ 20 × 46px, so full title and body lines share a right edge.
+const TITLE_CHAR_COUNT = 17;
 /** Top padding for reading pages after the first (avoids text touching the edge). */
 const PAGE_TOP_PADDING = 60;
 /** Bottom breathing room above the fixed interaction bar on reading pages. */
@@ -71,7 +73,7 @@ export interface ZhihuScrollRenderOutput {
 export function renderZhihuScrollStrip(
   input: ZhihuScrollRenderInput,
 ): ZhihuScrollRenderOutput {
-  const titleLines = wrapText(input.sourceTitle, 20, 6);
+  const titleLines = wrapText(input.sourceTitle, TITLE_CHAR_COUNT, 6);
   const headerHeight =
     HEADER_PADDING_TOP +
     titleLines.length * TITLE_LINE_HEIGHT +

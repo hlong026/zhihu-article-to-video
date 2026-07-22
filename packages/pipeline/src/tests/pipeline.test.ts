@@ -1278,6 +1278,20 @@ export async function runPipelineTests(): Promise<void> {
     true,
     "scroll strip should contain body paragraphs",
   );
+  const titleAlignmentStrip = renderZhihuScrollStrip({
+    sourceTitle: "一".repeat(18),
+    paragraphs: ["用于验证标题和正文右边界按实际字号比例对齐的测试正文。"],
+    meta: null,
+    tags: [],
+    fullContentOutput: false,
+  });
+  equal(
+    titleAlignmentStrip.svg.includes(
+      `<tspan x="72" dy="0">${"一".repeat(17)}</tspan><tspan x="72" dy="76">一</tspan>`,
+    ),
+    true,
+    "a title line should use 17 CJK characters to match the 20-character body width",
+  );
   equal(
     stripResult.svg.includes("节选于知乎"),
     false,
