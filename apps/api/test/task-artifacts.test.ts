@@ -153,11 +153,11 @@ describe("task detail artifacts", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    // 3 cards = cover 1s + body 2s + tail 2s, matching pipeline duration math.
+    // 3 cards = cover 1s + 2×body 3s, matching pipeline duration math.
     expect(response.json().artifacts).toEqual({
       imageCount: 3,
       videoReady: true,
-      durationSeconds: 5,
+      durationSeconds: 7,
     });
     expect(Array.isArray(response.json().attempts)).toBe(true);
     await app.close();
@@ -182,7 +182,7 @@ describe("task detail artifacts", () => {
     expect(withoutVideo.json().artifacts).toEqual({
       imageCount: 2,
       videoReady: false,
-      durationSeconds: 3,
+      durationSeconds: 4,
     });
     await app.close();
   });

@@ -48,16 +48,16 @@ describe("media renderer", () => {
         },
       );
 
-      expect(assets.imagePaths).toHaveLength(5);
+      expect(assets.imagePaths).toHaveLength(4);
       expect(assets.imagePaths[0]).toMatch(/1-cover\.png$/);
       await expect(stat(assets.imagePaths[0]!)).resolves.toMatchObject({
         isFile: expect.any(Function),
       });
       expect(assets.videoPath).toBe(join(directory, "video.mp4"));
-      expect(assets.durationSeconds).toBe(9);
+      expect(assets.durationSeconds).toBe(10);
       expect(receivedCommand).toMatchObject({
         executable: "ffmpeg",
-        durationSeconds: 9,
+        durationSeconds: 10,
       });
     } finally {
       await rm(directory, { recursive: true, force: true });

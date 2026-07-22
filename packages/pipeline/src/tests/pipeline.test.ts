@@ -420,16 +420,16 @@ export async function runPipelineTests(): Promise<void> {
   const cards = buildCardSequence(validSummary, "三个方法");
   equal(
     cards.length,
-    5,
-    "card sequence should include cover, body pages, and tail",
+    4,
+    "card sequence should include cover and body pages (CTA overlaid on last body)",
   );
   equal(cards[0]?.kind, "cover", "first card should be cover");
   equal(cards[1]?.kind, "body", "middle cards should be body cards");
-  equal(cards[4]?.kind, "tail", "last card should be the tail card");
+  equal(cards[3]?.kind, "body", "last card should be a body card with CTA overlay");
   equal(
-    cards[4]?.text,
+    (cards[3] as { ctaOverlay?: string }).ctaOverlay,
     "来知乎搜索「三个方法」看全文",
-    "tail should interpolate the verified keyword",
+    "last body card should have the CTA overlay with the verified keyword",
   );
   deepEqual(
     cards[0]?.canvas,
@@ -443,22 +443,22 @@ export async function runPipelineTests(): Promise<void> {
   );
   equal(
     untruncatedCards.length,
-    5,
-    "the tail is mandatory even for a fully shown article",
+    4,
+    "CTA overlay is on the last body card even for a fully shown article",
   );
   equal(
     untruncatedCards.at(-1)?.kind,
-    "tail",
-    "every sequence must end on the search-keyword tail",
+    "body",
+    "every sequence ends on a body card with CTA overlay",
   );
   equal(
-    untruncatedCards.at(-1)?.text,
+    (untruncatedCards.at(-1) as { ctaOverlay?: string }).ctaOverlay,
     "来知乎搜索「三个方法」看更多",
-    "a complete article's tail should invite viewers to see more, not the full text",
+    "a complete article's CTA should invite viewers to see more, not the full text",
   );
   throws(
     () => buildCardSequence({ ...validSummary, truncated: false }, ""),
-    "rendering the mandatory tail still requires a verified keyword",
+    "rendering the CTA overlay still requires a verified keyword",
   );
 
   equal(
@@ -482,7 +482,7 @@ export async function runPipelineTests(): Promise<void> {
   );
   deepEqual(
     svgCards.map((card) => card.filename),
-    ["1-cover.svg", "2-body.svg", "3-body.svg", "4-body.svg", "5-tail.svg"],
+    ["1-cover.svg", "2-body.svg", "3-body.svg", "4-body.svg"],
     "SVG filenames should be deterministic and ordered by page",
   );
   equal(
@@ -501,14 +501,14 @@ export async function runPipelineTests(): Promise<void> {
     "body SVG should XML-escape Chinese text content",
   );
   equal(
-    svgCards[4]?.svg.includes("三个方法"),
+    svgCards[3]?.svg.includes("三个方法"),
     true,
-    "tail SVG should include the verified search phrase",
+    "last body SVG should include the verified search phrase as CTA overlay",
   );
   equal(
-    svgCards[4]?.svg.includes("&amp;"),
+    svgCards[3]?.svg.includes("&amp;"),
     true,
-    "tail SVG should XML-escape the verified search phrase",
+    "last body SVG should XML-escape the verified search phrase",
   );
 
   const metaSummary: VideoSummary = {
@@ -629,7 +629,7 @@ export async function runPipelineTests(): Promise<void> {
       validSummary,
       "三个方法",
     );
-    equal(writtenCards.length, 5, "every card should be written to disk");
+    equal(writtenCards.length, 4, "every card should be written to disk");
     const writtenCover = await readFile(writtenCards[0]!.outputPath, "utf8");
     equal(
       writtenCover,
@@ -651,25 +651,25 @@ export async function runPipelineTests(): Promise<void> {
         pngProgress.push([done, total]);
       },
     );
-    equal(writtenPngCards.length, 5, "every SVG card should rasterize to PNG");
+    equal(writtenPngCards.length, 4, "every SVG card should rasterize to PNG");
     equal(
       pngProgress.length,
-      5,
+      4,
       "the PNG writer should report progress for every card",
     );
     deepEqual(
       pngProgress.map(([, total]) => total),
-      [5, 5, 5, 5, 5],
+      [4, 4, 4, 4],
       "each progress callback should carry the full card count",
     );
     deepEqual(
       pngProgress.map(([done]) => done).sort((a, b) => a - b),
-      [1, 2, 3, 4, 5],
+      [1, 2, 3, 4],
       "progress should advance exactly once per written card",
     );
     equal(
       pngProgress.at(-1)?.[0],
-      5,
+      4,
       "the final progress report should complete the set",
     );
     equal(
@@ -689,17 +689,17 @@ export async function runPipelineTests(): Promise<void> {
 
   equal(
     totalVideoDuration(cards),
-    9,
-    "duration should be cover 1s + body pages 2s each + tail 2s",
+    10,
+    "duration should be cover 1s + body pages 3s each (default)",
   );
   const command = buildFfmpegVideoCommand(
     cards,
-    ["cover.png", "01.png", "02.png", "03.png", "tail.png"],
+    ["cover.png", "01.png", "02.png", "03.png"],
     "video.mp4",
   );
   equal(
     command.durationSeconds,
-    9,
+    10,
     "FFmpeg command should report the calculated duration",
   );
   equal(
@@ -709,13 +709,13 @@ export async function runPipelineTests(): Promise<void> {
   );
   equal(
     command.args.filter((argument) => argument === "-loop").length,
-    5,
+    4,
     "each still image should be looped independently",
   );
   equal(
-    command.args.includes("2"),
+    command.args.includes("3"),
     true,
-    "body and tail cards should be rendered for two seconds",
+    "body cards should be rendered for three seconds by default",
   );
   throws(
     () => buildFfmpegVideoCommand(cards, ["cover.png"], "video.mp4"),
@@ -725,7 +725,7 @@ export async function runPipelineTests(): Promise<void> {
     () =>
       buildFfmpegVideoCommand(
         cards.slice(1),
-        ["01.png", "02.png", "03.png", "tail.png"],
+        ["01.png", "02.png", "03.png"],
         "video.mp4",
       ),
     "a video without a cover should fail before FFmpeg is invoked",
@@ -733,7 +733,7 @@ export async function runPipelineTests(): Promise<void> {
 
   const musicCommand = buildFfmpegVideoCommand(
     cards,
-    ["cover.png", "01.png", "02.png", "03.png", "tail.png"],
+    ["cover.png", "01.png", "02.png", "03.png"],
     "video.mp4",
     { path: "/music/bgm.mp3", volume: 0.3, fadeOutSeconds: 1 },
   );
@@ -760,7 +760,7 @@ export async function runPipelineTests(): Promise<void> {
   const filterIndex = musicCommand.args.indexOf("-filter_complex");
   equal(
     musicCommand.args[filterIndex + 1]?.includes(
-      "[5:a]atrim=0:9,asetpts=PTS-STARTPTS,volume=0.3,afade=t=out:st=8:d=1[a]",
+      "[4:a]atrim=0:10,asetpts=PTS-STARTPTS,volume=0.3,afade=t=out:st=9:d=1[a]",
     ),
     true,
     "the audio filter should trim to video length, apply volume and a trailing fade-out",
@@ -768,7 +768,7 @@ export async function runPipelineTests(): Promise<void> {
   equal(
     buildFfmpegVideoCommand(
       cards,
-      ["cover.png", "01.png", "02.png", "03.png", "tail.png"],
+      ["cover.png", "01.png", "02.png", "03.png"],
       "video.mp4",
     ).args.includes("-map"),
     true,
@@ -807,13 +807,13 @@ export async function runPipelineTests(): Promise<void> {
   if (readyVideo.kind === "ready") {
     equal(
       readyVideo.cards.length,
-      3,
-      "a short article should expose cover, one body page, and the mandatory tail",
+      2,
+      "a short article should expose cover and one body page with CTA overlay",
     );
     equal(
       readyVideo.cards.at(-1)?.kind,
-      "tail",
-      "even a short article must end on the mandatory tail",
+      "body",
+      "even a short article must end on a body card with CTA overlay",
     );
     equal(
       readyVideo.summary.truncated,
@@ -1017,52 +1017,52 @@ export async function runPipelineTests(): Promise<void> {
 
   // ── Custom body-page dwell time ─────────────────────────────────────
   equal(
-    durationForCard("cover", 3),
+    durationForCard("cover"),
     1,
-    "the cover must always stay at one second",
+    "the cover defaults to one second",
   );
   equal(
-    durationForCard("tail", 3),
-    2,
-    "the tail must always stay at two seconds",
+    durationForCard("cover", { coverPageDurationSeconds: 3 }),
+    3,
+    "the cover should honour the configured cover dwell time",
   );
   equal(
-    durationForCard("body", 1.5),
-    1.5,
+    durationForCard("body", { bodyPageDurationSeconds: 4 }),
+    4,
     "body pages should honour the configured dwell time",
   );
   equal(
-    durationForCard("body", -1),
-    2,
-    "non-positive durations should fall back to two seconds",
+    durationForCard("body", { bodyPageDurationSeconds: -1 }),
+    3,
+    "non-positive durations should fall back to three seconds",
   );
   equal(
-    durationForCard("body", Number.NaN),
-    2,
-    "non-finite durations should fall back to two seconds",
+    durationForCard("body", { bodyPageDurationSeconds: Number.NaN }),
+    3,
+    "non-finite durations should fall back to three seconds",
   );
   equal(
-    totalVideoDuration(cards, 1.5),
-    7.5,
-    "a 1.5s body dwell time should yield cover 1 + 3×1.5 + tail 2",
+    totalVideoDuration(cards, { bodyPageDurationSeconds: 4 }),
+    13,
+    "a 4s body dwell time should yield cover 1 + 3×4",
   );
   equal(
-    totalVideoDuration(cards, 3),
-    12,
-    "a 3s body dwell time should yield cover 1 + 3×3 + tail 2",
+    totalVideoDuration(cards, { coverPageDurationSeconds: 2, bodyPageDurationSeconds: 5 }),
+    17,
+    "cover 2 + 3×5 = 17",
   );
 
   const customDurationCommand = buildFfmpegVideoCommand(
     cards,
-    ["cover.png", "01.png", "02.png", "03.png", "tail.png"],
+    ["cover.png", "01.png", "02.png", "03.png"],
     "video.mp4",
     undefined,
-    1.5,
+    { coverPageDurationSeconds: 2, bodyPageDurationSeconds: 4 },
   );
   equal(
     customDurationCommand.durationSeconds,
-    7.5,
-    "the FFmpeg command should honour the custom body dwell time",
+    14,
+    "the FFmpeg command should honour the custom timing options",
   );
   const dwellTimes: string[] = [];
   customDurationCommand.args.forEach((argument, index) => {
@@ -1072,8 +1072,8 @@ export async function runPipelineTests(): Promise<void> {
   });
   deepEqual(
     dwellTimes,
-    ["1", "1.5", "1.5", "1.5", "2"],
-    "per-image dwell times should be cover 1s, body 1.5s each, tail 2s",
+    ["2", "4", "4", "4"],
+    "per-image dwell times should be cover 2s, body 4s each",
   );
 
   // ── Full-content output mode ────────────────────────────────────────
@@ -1168,8 +1168,8 @@ export async function runPipelineTests(): Promise<void> {
     );
     equal(
       fullContentVideo.cards.length,
-      fullContentVideo.summary.pages.length + 2,
-      "the card sequence should be cover + every body page + tail",
+      fullContentVideo.summary.pages.length + 1,
+      "the card sequence should be cover + every body page (CTA on last)",
     );
     equal(
       fullContentVideo.cards[0]?.kind,
@@ -1178,8 +1178,8 @@ export async function runPipelineTests(): Promise<void> {
     );
     equal(
       fullContentVideo.cards.at(-1)?.kind,
-      "tail",
-      "the full-content video should still end with the tail",
+      "body",
+      "the full-content video should end with a body card with CTA overlay",
     );
   }
 }

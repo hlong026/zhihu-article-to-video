@@ -39,8 +39,11 @@ export class TaskWorker {
        * time and full-content mode) at render time.
        */
       resolveVideoSettings?: () => {
+        coverPageDurationSeconds: number;
         bodyPageDurationSeconds: number;
         fullContentOutput: boolean;
+        videoMode: "slide" | "scroll";
+        scrollSpeed: number;
       };
       /** Resolved FFmpeg executable path (bundled or system). */
       ffmpegExecutable?: string;
@@ -73,8 +76,11 @@ export class TaskWorker {
     if (!task) return;
     const outputDirectory = join(this.dependencies.outputDirectory, taskId);
     const videoSettings = this.dependencies.resolveVideoSettings?.() ?? {
-      bodyPageDurationSeconds: 2,
+      coverPageDurationSeconds: 1,
+      bodyPageDurationSeconds: 3,
       fullContentOutput: false,
+      videoMode: "slide" as const,
+      scrollSpeed: 3,
     };
     try {
       this.repository.reportTaskProgress(taskId, 5, "开始读取文章内容");
@@ -125,7 +131,12 @@ export class TaskWorker {
         // A "ready" result implies the keyword was verified by the pipeline.
         keyword: task.articleKeyword!,
         audio: this.dependencies.resolveAudio?.() ?? undefined,
-        bodyPageDurationSeconds: videoSettings.bodyPageDurationSeconds,
+        timing: {
+          coverPageDurationSeconds: videoSettings.coverPageDurationSeconds,
+          bodyPageDurationSeconds: videoSettings.bodyPageDurationSeconds,
+        },
+        videoMode: videoSettings.videoMode,
+        scrollSpeed: videoSettings.scrollSpeed,
         ffmpegExecutable: this.dependencies.ffmpegExecutable,
         tailTemplate: task.tailNoteTemplate,
         onImageProgress: (done, total) =>
@@ -193,8 +204,11 @@ export class TaskWorker {
     }
     const outputDirectory = join(this.dependencies.outputDirectory, taskId);
     const videoSettings = this.dependencies.resolveVideoSettings?.() ?? {
-      bodyPageDurationSeconds: 2,
+      coverPageDurationSeconds: 1,
+      bodyPageDurationSeconds: 3,
       fullContentOutput: false,
+      videoMode: "slide" as const,
+      scrollSpeed: 3,
     };
     const content: {
       title: string;
@@ -245,7 +259,12 @@ export class TaskWorker {
         summary,
         keyword,
         audio: this.dependencies.resolveAudio?.() ?? undefined,
-        bodyPageDurationSeconds: videoSettings.bodyPageDurationSeconds,
+        timing: {
+          coverPageDurationSeconds: videoSettings.coverPageDurationSeconds,
+          bodyPageDurationSeconds: videoSettings.bodyPageDurationSeconds,
+        },
+        videoMode: videoSettings.videoMode,
+        scrollSpeed: videoSettings.scrollSpeed,
         ffmpegExecutable: this.dependencies.ffmpegExecutable,
         tailTemplate: task.tailNoteTemplate,
         onImageProgress: (done, total) =>

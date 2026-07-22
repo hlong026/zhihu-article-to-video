@@ -10,7 +10,7 @@ import type {
   SourceType,
   TaskStatus,
 } from "@zhihu-video/contracts";
-import { processingConcurrencyOptions, bodyPageDurationOptions } from "@zhihu-video/contracts";
+import { processingConcurrencyOptions, bodyPageDurationOptions, coverPageDurationOptions } from "@zhihu-video/contracts";
 
 import type { SqliteDatabase } from "./database.js";
 import type { ImportRowError, ImportTaskInput } from "./importer.js";
@@ -38,8 +38,11 @@ export const DEFAULT_BGM_SETTINGS: BgmSettings = {
 
 export const DEFAULT_PROCESSING_SETTINGS: ProcessingSettings = {
   concurrency: 5,
-  bodyPageDurationSeconds: 2,
+  coverPageDurationSeconds: 1,
+  bodyPageDurationSeconds: 3,
   fullContentOutput: false,
+  videoMode: "slide",
+  scrollSpeed: 3,
 };
 
 export const DEFAULT_AI_SETTINGS: AiSettings = {
@@ -620,6 +623,11 @@ export class TaskRepository {
       )
         ? Number(parsed.concurrency)
         : DEFAULT_PROCESSING_SETTINGS.concurrency;
+      const coverPageDurationSeconds = (
+        coverPageDurationOptions as readonly number[]
+      ).includes(Number(parsed.coverPageDurationSeconds))
+        ? Number(parsed.coverPageDurationSeconds)
+        : DEFAULT_PROCESSING_SETTINGS.coverPageDurationSeconds;
       const bodyPageDurationSeconds = (
         bodyPageDurationOptions as readonly number[]
       ).includes(Number(parsed.bodyPageDurationSeconds))
@@ -629,7 +637,17 @@ export class TaskRepository {
         typeof parsed.fullContentOutput === "boolean"
           ? parsed.fullContentOutput
           : DEFAULT_PROCESSING_SETTINGS.fullContentOutput;
-      return { concurrency, bodyPageDurationSeconds, fullContentOutput };
+      const videoMode =
+        parsed.videoMode === "slide" || parsed.videoMode === "scroll"
+          ? parsed.videoMode
+          : DEFAULT_PROCESSING_SETTINGS.videoMode;
+      const scrollSpeed =
+        typeof parsed.scrollSpeed === "number" &&
+        parsed.scrollSpeed >= 1 &&
+        parsed.scrollSpeed <= 5
+          ? Math.round(parsed.scrollSpeed)
+          : DEFAULT_PROCESSING_SETTINGS.scrollSpeed;
+      return { concurrency, coverPageDurationSeconds, bodyPageDurationSeconds, fullContentOutput, videoMode, scrollSpeed };
     } catch {
       return { ...DEFAULT_PROCESSING_SETTINGS };
     }
@@ -672,11 +690,24 @@ export class TaskRepository {
       throw new Error("并发数仅支持 5 / 10 / 15 / 20。");
     }
     if (
+      !(coverPageDurationOptions as readonly number[]).includes(
+        settings.coverPageDurationSeconds,
+      )
+    ) {
+      throw new Error("封面页时长仅支持 1 / 2 / 3 / 4 / 5 秒。");
+    }
+    if (
       !(bodyPageDurationOptions as readonly number[]).includes(
         settings.bodyPageDurationSeconds,
       )
     ) {
-      throw new Error("正文页时长仅支持 1 / 1.5 / 2 / 2.5 / 3 秒。");
+      throw new Error("正文页时长仅支持 3 / 4 / 5 / 6 秒。");
+    }
+    if (settings.videoMode !== "slide" && settings.videoMode !== "scroll") {
+      throw new Error("视频模式仅支持 slide 或 scroll。");
+    }
+    if (settings.scrollSpeed < 1 || settings.scrollSpeed > 5) {
+      throw new Error("滚动速度仅支持 1~5。");
     }
     this.database
       .prepare(

@@ -77,8 +77,11 @@ declare global {
       getProcessing(): Promise<ProcessingSettings>;
       updateProcessing(patch: {
         concurrency?: number;
+        coverPageDurationSeconds?: number;
         bodyPageDurationSeconds?: number;
         fullContentOutput?: boolean;
+        videoMode?: "slide" | "scroll";
+        scrollSpeed?: number;
       }): Promise<ProcessingSettings>;
     };
   }

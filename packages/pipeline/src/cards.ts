@@ -3,7 +3,7 @@ import type { VideoSummary } from "./summary.js";
 
 export const cardCanvas = { width: 1080, height: 1920 } as const;
 
-export type CardKind = "cover" | "body" | "tail";
+export type CardKind = "cover" | "body";
 
 export interface BaseCardRenderModel {
   kind: CardKind;
@@ -31,19 +31,11 @@ export interface BodyCardRenderModel extends BaseCardRenderModel {
   kind: "body";
   body: string;
   sourceRefs: number[];
+  /** CTA overlay text rendered centered on the last body card (yellow, bold). */
+  ctaOverlay?: string;
 }
 
-export interface TailCardRenderModel extends BaseCardRenderModel {
-  kind: "tail";
-  keyword: string;
-  /** Drives the lead copy: truncated shows "以上为节选", complete shows "全文完". */
-  truncated: boolean;
-  /** Custom CTA template; when set, overrides the default truncated/complete copy. */
-  tailTemplate?: string;
-}
-
-export type CardRenderModel =
-  CoverCardRenderModel | BodyCardRenderModel | TailCardRenderModel;
+export type CardRenderModel = CoverCardRenderModel | BodyCardRenderModel;
 
 /**
  * The API supplies the Playwright screenshot implementation. Keeping the
@@ -57,9 +49,9 @@ export interface CardImageRenderer {
 }
 
 /**
- * The tail (search-keyword CTA) is mandatory on every video so viewers can
- * always find the source on Zhihu. `summary.truncated` only varies the tail's
- * lead copy so a fully shown article never claims to be an excerpt.
+ * The CTA (search-keyword引流) is overlaid on the last body card so viewers can
+ * always find the source on Zhihu without a separate tail page.
+ * `summary.truncated` only varies the CTA copy.
  */
 export function buildCardSequence(
   summary: VideoSummary,
@@ -68,10 +60,10 @@ export function buildCardSequence(
 ): CardRenderModel[] {
   const normalizedKeyword = keyword.trim();
   if (!normalizedKeyword) {
-    throw new Error("文章口令不能为空，不能渲染尾页。");
+    throw new Error("文章口令不能为空，不能渲染引流文字。");
   }
 
-  const totalPages = summary.pages.length + 2;
+  const totalPages = summary.pages.length + 1; // cover + body pages (no separate tail)
   // The cover mirrors the source page: original question/article title first,
   // then its opening lines. The AI title remains useful for task/file naming.
   const previewLines = (summary.pages[0]?.body.split("\n") ?? [])
@@ -89,6 +81,11 @@ export function buildCardSequence(
     meta: summary.coverMeta ?? null,
     text: summary.sourceTitle,
   };
+  const ctaText = tailTemplate
+    ? tailTemplate.replaceAll("{文章口令}", normalizedKeyword)
+    : summary.truncated
+      ? `来知乎搜索「${normalizedKeyword}」看全文`
+      : `来知乎搜索「${normalizedKeyword}」看更多`;
   const bodyCards: BodyCardRenderModel[] = summary.pages.map((page, index) => ({
     kind: "body",
     canvas: cardCanvas,
@@ -97,22 +94,9 @@ export function buildCardSequence(
     body: page.body,
     sourceRefs: page.sourceRefs,
     text: page.body,
+    // Overlay CTA on the last body card
+    ...(index === summary.pages.length - 1 ? { ctaOverlay: ctaText } : {}),
   }));
-  const ctaText = tailTemplate
-    ? tailTemplate.replaceAll("{文章口令}", normalizedKeyword)
-    : summary.truncated
-      ? `来知乎搜索「${normalizedKeyword}」看全文`
-      : `来知乎搜索「${normalizedKeyword}」看更多`;
-  const tail: TailCardRenderModel = {
-    kind: "tail",
-    canvas: cardCanvas,
-    pageNumber: totalPages,
-    totalPages,
-    keyword: normalizedKeyword,
-    truncated: summary.truncated,
-    tailTemplate: tailTemplate || undefined,
-    text: ctaText,
-  };
 
-  return [cover, ...bodyCards, tail];
+  return [cover, ...bodyCards];
 }

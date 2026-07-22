@@ -61,6 +61,12 @@ contextBridge.exposeInMainWorld("desktop", {
   previewBgm: () => ipcRenderer.invoke("desktop:preview-bgm"),
   clearBgm: () => ipcRenderer.invoke("desktop:clear-bgm"),
   getProcessing: () => ipcRenderer.invoke("desktop:get-processing"),
-  updateProcessing: (patch: { concurrency: number }) =>
-    ipcRenderer.invoke("desktop:update-processing", patch),
+  updateProcessing: (patch: {
+    concurrency?: number;
+    coverPageDurationSeconds?: number;
+    bodyPageDurationSeconds?: number;
+    fullContentOutput?: boolean;
+    videoMode?: "slide" | "scroll";
+    scrollSpeed?: number;
+  }) => ipcRenderer.invoke("desktop:update-processing", patch),
 });

@@ -103,13 +103,28 @@ const processingUpdateSchema = z
         message: "并发数仅支持 5 / 10 / 15 / 20",
       })
       .optional(),
+    coverPageDurationSeconds: z
+      .number()
+      .int()
+      .refine((value) => [1, 2, 3, 4, 5].includes(value), {
+        message: "封面页时长仅支持 1 / 2 / 3 / 4 / 5 秒",
+      })
+      .optional(),
     bodyPageDurationSeconds: z
       .number()
-      .refine((value) => [1, 1.5, 2, 2.5, 3].includes(value), {
-        message: "正文页时长仅支持 1 / 1.5 / 2 / 2.5 / 3 秒",
+      .int()
+      .refine((value) => [3, 4, 5, 6].includes(value), {
+        message: "正文页时长仅支持 3 / 4 / 5 / 6 秒",
       })
       .optional(),
     fullContentOutput: z.boolean().optional(),
+    videoMode: z.enum(["slide", "scroll"]).optional(),
+    scrollSpeed: z
+      .number()
+      .int()
+      .min(1)
+      .max(5)
+      .optional(),
   })
   .strict();
 
@@ -226,8 +241,11 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
           resolveVideoSettings: () => {
             const settings = repository.getProcessingSettings();
             return {
+              coverPageDurationSeconds: settings.coverPageDurationSeconds,
               bodyPageDurationSeconds: settings.bodyPageDurationSeconds,
               fullContentOutput: settings.fullContentOutput,
+              videoMode: settings.videoMode,
+              scrollSpeed: settings.scrollSpeed,
             };
           },
         })
@@ -891,9 +909,13 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
     const current = repository.getProcessingSettings();
     return repository.saveProcessingSettings({
       concurrency: input.concurrency ?? current.concurrency,
+      coverPageDurationSeconds:
+        input.coverPageDurationSeconds ?? current.coverPageDurationSeconds,
       bodyPageDurationSeconds:
         input.bodyPageDurationSeconds ?? current.bodyPageDurationSeconds,
       fullContentOutput: input.fullContentOutput ?? current.fullContentOutput,
+      videoMode: input.videoMode ?? current.videoMode,
+      scrollSpeed: input.scrollSpeed ?? current.scrollSpeed,
     });
   });
 
@@ -975,10 +997,16 @@ async function loadTaskArtifacts(
   ).length;
   const videoReady = existsSync(join(outputDirectory, "video.mp4"));
   if (imageCount === 0 && !videoReady) return null;
-  const bodyDuration = repository.getProcessingSettings().bodyPageDurationSeconds;
-  // cover (1s) + body pages + tail (2s)
+  const settings = repository.getProcessingSettings();
+  const coverDuration = settings.coverPageDurationSeconds;
+  const bodyDuration = settings.bodyPageDurationSeconds;
+  // Slide: cover + body pages. Scroll: total strip height / scroll speed.
   const durationSeconds =
-    imageCount >= 2 ? 1 + (imageCount - 2) * bodyDuration + 2 : 0;
+    imageCount >= 1
+      ? settings.videoMode === "scroll"
+        ? Math.ceil((imageCount * 1920) / (settings.scrollSpeed * 100))
+        : coverDuration + (imageCount - 1) * bodyDuration
+      : 0;
   return { imageCount, videoReady, durationSeconds };
 }
 

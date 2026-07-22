@@ -108,18 +108,27 @@ describe("processing settings", () => {
     expect(
       repository.saveProcessingSettings({
         concurrency: 15,
-        bodyPageDurationSeconds: 2.5,
+        coverPageDurationSeconds: 3,
+        bodyPageDurationSeconds: 5,
         fullContentOutput: true,
+        videoMode: "scroll",
+        scrollSpeed: 4,
       }),
     ).toEqual({
       concurrency: 15,
-      bodyPageDurationSeconds: 2.5,
+      coverPageDurationSeconds: 3,
+      bodyPageDurationSeconds: 5,
       fullContentOutput: true,
+      videoMode: "scroll",
+      scrollSpeed: 4,
     });
     expect(repository.getProcessingSettings()).toEqual({
       concurrency: 15,
-      bodyPageDurationSeconds: 2.5,
+      coverPageDurationSeconds: 3,
+      bodyPageDurationSeconds: 5,
       fullContentOutput: true,
+      videoMode: "scroll",
+      scrollSpeed: 4,
     });
   });
 
@@ -128,17 +137,23 @@ describe("processing settings", () => {
     expect(() =>
       repository.saveProcessingSettings({
         concurrency: 7,
-        bodyPageDurationSeconds: 2,
+        coverPageDurationSeconds: 1,
+        bodyPageDurationSeconds: 3,
         fullContentOutput: false,
+        videoMode: "slide",
+        scrollSpeed: 3,
       }),
     ).toThrow("并发数仅支持 5 / 10 / 15 / 20");
     expect(() =>
       repository.saveProcessingSettings({
         concurrency: 5,
-        bodyPageDurationSeconds: 4,
+        coverPageDurationSeconds: 1,
+        bodyPageDurationSeconds: 2,
         fullContentOutput: false,
+        videoMode: "slide",
+        scrollSpeed: 3,
       }),
-    ).toThrow("正文页时长仅支持 1 / 1.5 / 2 / 2.5 / 3 秒");
+    ).toThrow("正文页时长仅支持 3 / 4 / 5 / 6 秒");
     expect(repository.getProcessingSettings().concurrency).toBe(5);
   });
 

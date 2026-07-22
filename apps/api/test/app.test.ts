@@ -235,8 +235,11 @@ describe("import range and preview APIs", () => {
 describe("processing settings API", () => {
   const defaults = {
     concurrency: 5,
-    bodyPageDurationSeconds: 2,
+    coverPageDurationSeconds: 1,
+    bodyPageDurationSeconds: 3,
     fullContentOutput: false,
+    videoMode: "slide",
+    scrollSpeed: 3,
   };
 
   it("reads the defaults and persists an allowed preset", async () => {
@@ -271,12 +274,12 @@ describe("processing settings API", () => {
     const duration = await app.inject({
       method: "PUT",
       url: "/api/settings/processing",
-      payload: { bodyPageDurationSeconds: 1.5 },
+      payload: { bodyPageDurationSeconds: 5 },
     });
     expect(duration.statusCode).toBe(200);
     expect(duration.json()).toEqual({
       ...defaults,
-      bodyPageDurationSeconds: 1.5,
+      bodyPageDurationSeconds: 5,
     });
 
     const fullContent = await app.inject({
@@ -287,7 +290,7 @@ describe("processing settings API", () => {
     expect(fullContent.statusCode).toBe(200);
     expect(fullContent.json()).toEqual({
       ...defaults,
-      bodyPageDurationSeconds: 1.5,
+      bodyPageDurationSeconds: 5,
       fullContentOutput: true,
     });
     await app.close();
@@ -310,7 +313,7 @@ describe("processing settings API", () => {
     const rejected = await app.inject({
       method: "PUT",
       url: "/api/settings/processing",
-      payload: { bodyPageDurationSeconds: 4 },
+      payload: { bodyPageDurationSeconds: 2 },
     });
     expect(rejected.statusCode).toBe(400);
     expect(rejected.json()).toMatchObject({ error: "VALIDATION_ERROR" });

@@ -47,11 +47,7 @@ export function svgCardFilename(card: CardRenderModel): string {
 
 export function renderSvgCard(card: CardRenderModel): string {
   const content =
-    card.kind === "cover"
-      ? renderCover(card)
-      : card.kind === "body"
-        ? renderBody(card)
-        : renderTail(card);
+    card.kind === "cover" ? renderCover(card) : renderBody(card);
 
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
@@ -231,7 +227,7 @@ function renderBody(card: Extract<CardRenderModel, { kind: "body" }>): string {
   // The body is already paginated into wrapped lines (with blank spacer lines
   // separating paragraphs), so it renders verbatim without re-wrapping.
   const bodyLines = card.body.split("\n");
-  return [
+  const parts = [
     '<rect width="1080" height="1920" fill="#FFFFFF"/>',
     svgText(bodyLines, {
       x: 90,
@@ -241,34 +237,28 @@ function renderBody(card: Extract<CardRenderModel, { kind: "body" }>): string {
       fill: "#1A1A1A",
       weight: 400,
     }),
-  ].join("\n");
-}
-
-function renderTail(card: Extract<CardRenderModel, { kind: "tail" }>): string {
-  // A truncated article warns the viewer the excerpt is partial; a fully shown
-  // article invites them to find more from the author instead.
-  const leadLine = card.truncated ? "原文较长，以上为节选" : "全文完";
-  const cta = card.tailTemplate
-    ? card.text
-    : card.truncated
-      ? `来知乎搜索「${card.keyword}」看全文`
-      : `来知乎搜索「${card.keyword}」看更多`;
-  const keywordLines = wrapText(cta, 14, 2);
-  return [
-    '<rect width="1080" height="1920" fill="#FFFFFF"/>',
-    '<g transform="rotate(-6 540 960)">',
-    `<text x="540" y="800" text-anchor="middle" fill="#D95D39" font-size="52" font-weight="700">${escapeSvgText(leadLine)}</text>`,
-    svgText(keywordLines, {
-      x: 540,
-      y: 940,
-      fontSize: 64,
-      lineHeight: 104,
-      fill: "#D95D39",
-      weight: 700,
-      anchor: "middle",
-    }),
-    "</g>",
-  ].join("\n");
+  ];
+  // CTA overlay: yellow bold text centered on the card with a semi-transparent
+  // dark backdrop for readability against the black body text.
+  if (card.ctaOverlay) {
+    const ctaLines = wrapText(card.ctaOverlay, 14, 3);
+    const lineHeight = 88;
+    const blockHeight = ctaLines.length * lineHeight + 40;
+    const blockTop = (1920 - blockHeight) / 2;
+    parts.push(
+      `<rect x="60" y="${blockTop}" width="960" height="${blockHeight}" rx="24" fill="rgba(0,0,0,0.72)"/>`,
+      svgText(ctaLines, {
+        x: 540,
+        y: blockTop + 52,
+        fontSize: 56,
+        lineHeight,
+        fill: "#FFD700",
+        weight: 700,
+        anchor: "middle",
+      }),
+    );
+  }
+  return parts.join("\n");
 }
 
 interface TextLayout {

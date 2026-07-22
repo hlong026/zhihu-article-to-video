@@ -1604,6 +1604,29 @@ textarea:focus {
   color: #899389;
   font-size: 11px;
 }
+.processing-mode-group {
+  display: flex;
+  gap: 8px;
+}
+.processing-mode-chip {
+  padding: 6px 16px;
+  border-radius: 8px;
+  border: 1.5px solid #d4d9d4;
+  background: #fff;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.processing-mode-chip.active {
+  border-color: #2e7d32;
+  background: #e8f5e9;
+  color: #2e7d32;
+  font-weight: 600;
+}
+.processing-mode-chip:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 .processing-warning {
   margin: 12px 0 0;
   padding: 9px 12px;

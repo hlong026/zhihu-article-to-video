@@ -65,7 +65,7 @@ export interface TaskAttemptLog {
 export interface TaskArtifactsSummary {
   imageCount: number;
   videoReady: boolean;
-  /** Cover 1s + body pages at the configured dwell time + tail 2s. */
+  /** Cover + body pages at the configured dwell times. */
   durationSeconds: number;
 }
 
@@ -167,8 +167,19 @@ export interface BgmSettingsView extends BgmSettings {
 /** Concurrency presets offered in the workbench processing card. */
 export const processingConcurrencyOptions = [5, 10, 15, 20] as const;
 
+/** Cover-page dwell-time presets (seconds) offered in the workbench card. */
+export const coverPageDurationOptions = [1, 2, 3, 4, 5] as const;
+
 /** Body-page dwell-time presets (seconds) offered in the workbench card. */
-export const bodyPageDurationOptions = [1, 1.5, 2, 2.5, 3] as const;
+export const bodyPageDurationOptions = [3, 4, 5, 6] as const;
+
+/** Video playback mode: horizontal slide (page-by-page) or vertical scroll. */
+export type VideoMode = "slide" | "scroll";
+
+/** Scroll speed range for vertical-scroll mode (1=slowest, 5=fastest). */
+export const scrollSpeedMin = 1;
+export const scrollSpeedMax = 5;
+export const scrollSpeedDefault = 3;
 
 /**
  * Global batch-processing configuration (single operator, one row). The
@@ -177,10 +188,16 @@ export const bodyPageDurationOptions = [1, 1.5, 2, 2.5, 3] as const;
  */
 export interface ProcessingSettings {
   concurrency: number;
-  /** Seconds each body page stays on screen (cover 1s / tail 2s are fixed). */
+  /** Seconds the cover page stays on screen (default 1). */
+  coverPageDurationSeconds: number;
+  /** Seconds each body page stays on screen (default 3). */
   bodyPageDurationSeconds: number;
   /** When true, body pagination is uncapped: the full article is rendered. */
   fullContentOutput: boolean;
+  /** Video playback mode: "slide" (horizontal page flip) or "scroll" (vertical). */
+  videoMode: VideoMode;
+  /** Vertical scroll speed 1~5 (only used when videoMode === "scroll"). */
+  scrollSpeed: number;
 }
 
 /**

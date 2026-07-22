@@ -360,18 +360,28 @@ function isManualContentUpdate(
 
 function isProcessingPatch(value: unknown): value is {
   concurrency?: number;
+  coverPageDurationSeconds?: number;
   bodyPageDurationSeconds?: number;
   fullContentOutput?: boolean;
+  videoMode?: "slide" | "scroll";
+  scrollSpeed?: number;
 } {
   if (typeof value !== "object" || value === null) return false;
   const patch = value as Record<string, unknown>;
   return (
     (patch.concurrency === undefined ||
       typeof patch.concurrency === "number") &&
+    (patch.coverPageDurationSeconds === undefined ||
+      typeof patch.coverPageDurationSeconds === "number") &&
     (patch.bodyPageDurationSeconds === undefined ||
       typeof patch.bodyPageDurationSeconds === "number") &&
     (patch.fullContentOutput === undefined ||
-      typeof patch.fullContentOutput === "boolean")
+      typeof patch.fullContentOutput === "boolean") &&
+    (patch.videoMode === undefined ||
+      patch.videoMode === "slide" ||
+      patch.videoMode === "scroll") &&
+    (patch.scrollSpeed === undefined ||
+      typeof patch.scrollSpeed === "number")
   );
 }
 

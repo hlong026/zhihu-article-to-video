@@ -3,12 +3,16 @@ import { basename, join } from "node:path";
 import { spawn } from "node:child_process";
 
 import {
+  buildFfmpegScrollCommand,
   buildFfmpegVideoCommand,
   writeSummaryPngCards,
   type FfmpegAudioOptions,
   type FfmpegCommand,
   type VideoSummary,
+  type VideoTimingOptions,
 } from "@zhihu-video/pipeline";
+
+export type VideoMode = "slide" | "scroll";
 
 export interface RenderVideoInput {
   outputDirectory: string;
@@ -17,8 +21,12 @@ export interface RenderVideoInput {
   keyword: string;
   /** Optional background-music track mixed under the slideshow. */
   audio?: FfmpegAudioOptions;
-  /** Seconds each body page stays on screen (cover 1s / tail 2s fixed). */
-  bodyPageDurationSeconds?: number;
+  /** Timing options for slide mode (cover + body page durations). */
+  timing?: VideoTimingOptions;
+  /** Video mode: "slide" (default) or "scroll". */
+  videoMode?: VideoMode;
+  /** Scroll speed 1~5 (only for scroll mode, default 3). */
+  scrollSpeed?: number;
   /** Reports per-card progress (done, total) while PNGs are rasterized. */
   onImageProgress?: (done: number, total: number) => void;
   /** Fires once every card is rendered and video encoding begins. */
@@ -61,13 +69,26 @@ export async function renderVideoAssets(
     input.onImageProgress,
     input.tailTemplate,
   );
-  const command = buildFfmpegVideoCommand(
-    cards.map(({ card }) => card),
-    cards.map(({ outputPath }) => outputPath),
-    videoPath,
-    input.audio,
-    input.bodyPageDurationSeconds,
-  );
+  const cardModels = cards.map(({ card }) => card);
+  const paths = cards.map(({ outputPath }) => outputPath);
+
+  const command =
+    input.videoMode === "scroll"
+      ? buildFfmpegScrollCommand(
+          cardModels,
+          paths,
+          videoPath,
+          input.scrollSpeed ?? 3,
+          input.audio,
+        )
+      : buildFfmpegVideoCommand(
+          cardModels,
+          paths,
+          videoPath,
+          input.audio,
+          input.timing,
+        );
+
   input.onVideoEncodingStart?.();
   await (dependencies.executeFfmpeg ?? executeFfmpeg)(command, input.ffmpegExecutable);
 

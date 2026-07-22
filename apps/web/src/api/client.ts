@@ -184,8 +184,11 @@ let mockBgm: BgmSettingsView = {
 
 let mockProcessing: ProcessingSettings = {
   concurrency: 5,
-  bodyPageDurationSeconds: 2,
+  coverPageDurationSeconds: 1,
+  bodyPageDurationSeconds: 3,
   fullContentOutput: false,
+  videoMode: "slide",
+  scrollSpeed: 3,
 };
 
 let mockAiSettings: AiSettingsView = {
@@ -643,8 +646,11 @@ export const apiClient = {
 
   async updateProcessing(patch: {
     concurrency?: number;
+    coverPageDurationSeconds?: number;
     bodyPageDurationSeconds?: number;
     fullContentOutput?: boolean;
+    videoMode?: "slide" | "scroll";
+    scrollSpeed?: number;
   }): Promise<ProcessingSettings> {
     if (useMockApi) {
       mockProcessing = { ...mockProcessing, ...patch };
