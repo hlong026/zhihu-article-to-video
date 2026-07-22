@@ -28,6 +28,8 @@ const BODY_CHAR_UNITS = 20; // wide-char slots per line (each CJK = 2 units → 
 const HEADER_PADDING_TOP = 60;
 const TITLE_FONT_SIZE = 54;
 const TITLE_LINE_HEIGHT = 76;
+/** Top padding for reading pages after the first (avoids text touching the edge). */
+const PAGE_TOP_PADDING = 60;
 
 const AUTHOR_BLOCK_HEIGHT = 160;
 const AUTHOR_PADDING_TOP = 32;
@@ -67,7 +69,7 @@ export interface ZhihuScrollRenderOutput {
 export function renderZhihuScrollStrip(
   input: ZhihuScrollRenderInput,
 ): ZhihuScrollRenderOutput {
-  const titleLines = wrapText(input.sourceTitle, 14, 6);
+  const titleLines = wrapText(input.sourceTitle, 17, 6);
   const headerHeight =
     HEADER_PADDING_TOP +
     titleLines.length * TITLE_LINE_HEIGHT +
@@ -275,11 +277,26 @@ export async function writeZhihuReadingPagePngs(
     barMeta,
   );
   const viewportHeight = SCROLL_VIEWPORT_HEIGHT;
-  const maxOffset = Math.max(0, rendered.stripHeight - viewportHeight);
-  const offsets = Array.from(
-    { length: Math.max(1, Math.ceil(maxOffset / viewportHeight) + 1) },
-    (_, index) => Math.min(index * viewportHeight, maxOffset),
-  ).filter((offset, index, all) => index === 0 || offset !== all[index - 1]);
+  // Effective content height per page (pages after the first reserve top padding).
+  const effectiveHeight = viewportHeight - PAGE_TOP_PADDING;
+  // Snap content boundaries to body-line grid to avoid cutting text in half.
+  const snapToLine = (px: number) =>
+    Math.floor(px / BODY_LINE_HEIGHT) * BODY_LINE_HEIGHT;
+
+  const offsets: number[] = [0];
+  let cursor = snapToLine(effectiveHeight);
+  while (cursor < rendered.stripHeight - PAGE_TOP_PADDING) {
+    offsets.push(cursor);
+    cursor += snapToLine(effectiveHeight);
+  }
+  // Ensure the last page reaches the strip bottom if there's remaining content.
+  const lastOffset = offsets[offsets.length - 1]!;
+  if (
+    rendered.stripHeight - lastOffset > viewportHeight &&
+    lastOffset + snapToLine(effectiveHeight) < rendered.stripHeight
+  ) {
+    offsets.push(Math.max(0, rendered.stripHeight - viewportHeight));
+  }
 
   const pagePaths: string[] = [];
   for (const [index, top] of offsets.entries()) {
@@ -287,23 +304,25 @@ export async function writeZhihuReadingPagePngs(
       outputDirectory,
       `${String(index + 1).padStart(2, "0")}-reading.png`,
     );
-    await writeReadingPage(pagePath, rendered, top);
+    await writeReadingPage(pagePath, rendered, top, index === 0 ? 0 : PAGE_TOP_PADDING);
     pagePaths.push(pagePath);
   }
 
   if (!input.tailNote?.trim()) return { ...rendered, pagePaths };
 
+  // Replace the last reading page with the tail version so the CTA appears
+  // on the final page instead of appending a duplicate-content page.
   const tail = await writeScrollPngs(outputDirectory, input, barMeta);
   const tailPath = join(
     outputDirectory,
-    `${String(pagePaths.length + 1).padStart(2, "0")}-tail.png`,
+    `${String(pagePaths.length).padStart(2, "0")}-tail.png`,
   );
   await writeReadingPage(
     tailPath,
     tail,
     Math.max(0, tail.stripHeight - viewportHeight),
   );
-  pagePaths.push(tailPath);
+  pagePaths[pagePaths.length - 1] = tailPath;
 
   return { ...tail, pagePaths };
 }
@@ -312,9 +331,11 @@ async function writeReadingPage(
   outputPath: string,
   rendered: ScrollPngOutput,
   top: number,
+  topPadding = 0,
 ): Promise<void> {
+  const availableHeight = SCROLL_VIEWPORT_HEIGHT - topPadding;
   const sourceHeight = Math.min(
-    SCROLL_VIEWPORT_HEIGHT,
+    availableHeight,
     rendered.stripHeight - top,
   );
   const source = await sharp(rendered.stripPath)
@@ -322,7 +343,7 @@ async function writeReadingPage(
       left: 0,
       top,
       width: SCROLL_STRIP_WIDTH,
-      height: sourceHeight,
+      height: Math.max(1, sourceHeight),
     })
     .png()
     .toBuffer();
@@ -335,7 +356,7 @@ async function writeReadingPage(
     },
   })
     .composite([
-      { input: source, left: 0, top: 0 },
+      { input: source, left: 0, top: topPadding },
       { input: rendered.barPath, left: 0, top: SCROLL_VIEWPORT_HEIGHT },
     ])
     .png()

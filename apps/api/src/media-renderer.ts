@@ -248,7 +248,12 @@ export async function executeFfmpeg(
   command: FfmpegCommand,
   executableOverride?: string,
 ): Promise<void> {
-  const timeoutMs = 2 * 60 * 1000;
+  // Dynamic timeout: 3× the expected video duration (encoding overhead),
+  // with a floor of 2 minutes for short clips and a ceiling of 15 minutes.
+  const timeoutMs = Math.min(
+    15 * 60 * 1000,
+    Math.max(2 * 60 * 1000, command.durationSeconds * 3 * 1000),
+  );
   await new Promise<void>((resolve, reject) => {
     const process = spawn(
       executableOverride ?? command.executable,
