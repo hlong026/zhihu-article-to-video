@@ -1,4 +1,10 @@
-import { ArrowLeft, Download, FileSpreadsheet, Video } from "lucide-react";
+import {
+  ArrowLeft,
+  Download,
+  FileSpreadsheet,
+  Images,
+  Video,
+} from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import type {
@@ -10,7 +16,10 @@ import type {
 import { apiClient, isTerminalTaskStatus } from "../api/client";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { StatusBadge } from "../components/StatusBadge";
-import { AttemptTimeline, TaskPreviewMedia } from "../components/TaskPreviewMedia";
+import {
+  AttemptTimeline,
+  TaskPreviewMedia,
+} from "../components/TaskPreviewMedia";
 import { TaskTable } from "../components/TaskTable";
 import { useToast } from "../components/Toast";
 
@@ -44,9 +53,8 @@ export function BatchDetailPage() {
   const { batchId } = useParams<{ batchId: string }>();
   const [detail, setDetail] = useState<BatchDetailView | null>(null);
   const [selectedTask, setSelectedTask] = useState<ArticleTask | null>(null);
-  const [selectedDetail, setSelectedDetail] = useState<ArticleTaskDetail | null>(
-    null,
-  );
+  const [selectedDetail, setSelectedDetail] =
+    useState<ArticleTaskDetail | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<DeleteConfirmState | null>(
     null,
@@ -151,7 +159,9 @@ export function BatchDetailPage() {
     );
   }
 
-  async function handleBatchDownload(asset: "batch" | "workbook" | "videos") {
+  async function handleBatchDownload(
+    asset: "batch" | "workbook" | "videos" | "images",
+  ) {
     if (!batchId) return;
     if (window.desktop) {
       try {
@@ -160,7 +170,9 @@ export function BatchDetailPage() {
             ? await window.desktop.downloadBatch(batchId)
             : asset === "videos"
               ? await window.desktop.downloadBatchVideos(batchId)
-              : await window.desktop.downloadResultWorkbook(batchId);
+              : asset === "images"
+                ? await window.desktop.downloadBatchImages(batchId)
+                : await window.desktop.downloadResultWorkbook(batchId);
         toast(
           savedPath ? `已保存到：${savedPath}` : "已取消保存。",
           savedPath ? "success" : "info",
@@ -178,7 +190,9 @@ export function BatchDetailPage() {
         ? apiClient.getBatchDownloadUrl(batchId)
         : asset === "videos"
           ? apiClient.getBatchVideosDownloadUrl(batchId)
-          : apiClient.getResultWorkbookUrl(batchId);
+          : asset === "images"
+            ? apiClient.getBatchImagesDownloadUrl(batchId)
+            : apiClient.getResultWorkbookUrl(batchId);
     window.open(url, "_blank", "noopener,noreferrer");
   }
 
@@ -262,6 +276,14 @@ export function BatchDetailPage() {
           </button>
           <button
             type="button"
+            className="button button-secondary"
+            onClick={() => void handleBatchDownload("images")}
+          >
+            <Images size={16} />
+            下载全部图片
+          </button>
+          <button
+            type="button"
             className="button button-dark"
             onClick={() => void handleBatchDownload("batch")}
           >
@@ -291,7 +313,10 @@ export function BatchDetailPage() {
       </section>
 
       {detail.importErrors.length > 0 ? (
-        <section className="task-section import-errors" aria-labelledby="import-errors-title">
+        <section
+          className="task-section import-errors"
+          aria-labelledby="import-errors-title"
+        >
           <div className="section-header">
             <div>
               <p className="eyebrow">导入检查</p>

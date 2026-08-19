@@ -334,7 +334,7 @@ export class TaskWorker {
 }
 
 /** Reads the persisted article snapshot (written by the reader on success). */
-async function readSnapshotContent(outputDirectory: string): Promise<{
+export async function readSnapshotContent(outputDirectory: string): Promise<{
   title: string;
   paragraphs: string[];
   meta: SourcePageMeta | null;

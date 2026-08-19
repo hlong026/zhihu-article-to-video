@@ -11,15 +11,20 @@ contextBridge.exposeInMainWorld("desktop", {
   getTask: (taskId: string) => ipcRenderer.invoke("desktop:get-task", taskId),
   previewImport: (path: string) =>
     ipcRenderer.invoke("desktop:preview-import", path),
-  importExcel: (input: {
-    path: string;
-    startRow?: number;
-    endRow?: number;
-  }) => ipcRenderer.invoke("desktop:import-excel", input),
+  importExcel: (input: { path: string; startRow?: number; endRow?: number }) =>
+    ipcRenderer.invoke("desktop:import-excel", input),
   startBatch: (batchId: string) =>
     ipcRenderer.invoke("desktop:start-batch", batchId),
-  updateKeyword: (taskId: string, articleKeyword: string, tailNoteTemplate?: string) =>
-    ipcRenderer.invoke("desktop:update-keyword", { taskId, articleKeyword, tailNoteTemplate }),
+  updateKeyword: (
+    taskId: string,
+    articleKeyword: string,
+    tailNoteTemplate?: string,
+  ) =>
+    ipcRenderer.invoke("desktop:update-keyword", {
+      taskId,
+      articleKeyword,
+      tailNoteTemplate,
+    }),
   rerenderTail: (taskId: string) =>
     ipcRenderer.invoke("desktop:rerender-tail", taskId),
   saveManualContent: (taskId: string, title: string, content: string) =>
@@ -48,6 +53,8 @@ contextBridge.exposeInMainWorld("desktop", {
     ipcRenderer.invoke("desktop:download-batch", batchId),
   downloadBatchVideos: (batchId: string): Promise<string | null> =>
     ipcRenderer.invoke("desktop:download-batch-videos", batchId),
+  downloadBatchImages: (batchId: string): Promise<string | null> =>
+    ipcRenderer.invoke("desktop:download-batch-images", batchId),
   downloadResultWorkbook: (batchId: string): Promise<string | null> =>
     ipcRenderer.invoke("desktop:download-result-workbook", batchId),
   getBgm: () => ipcRenderer.invoke("desktop:get-bgm"),
@@ -68,5 +75,7 @@ contextBridge.exposeInMainWorld("desktop", {
     fullContentOutput?: boolean;
     videoMode?: "slide" | "scroll";
     scrollSpeed?: number;
+    imageExportRatio?: "9:16" | "3:4";
+    hideInteractionButtons?: boolean;
   }) => ipcRenderer.invoke("desktop:update-processing", patch),
 });

@@ -112,6 +112,8 @@ describe("processing settings", () => {
         fullContentOutput: true,
         videoMode: "scroll",
         scrollSpeed: 4,
+        imageExportRatio: "3:4",
+        hideInteractionButtons: true,
       }),
     ).toEqual({
       concurrency: 15,
@@ -120,6 +122,8 @@ describe("processing settings", () => {
       fullContentOutput: true,
       videoMode: "scroll",
       scrollSpeed: 4,
+      imageExportRatio: "3:4",
+      hideInteractionButtons: true,
     });
     expect(repository.getProcessingSettings()).toEqual({
       concurrency: 15,
@@ -128,6 +132,8 @@ describe("processing settings", () => {
       fullContentOutput: true,
       videoMode: "scroll",
       scrollSpeed: 4,
+      imageExportRatio: "3:4",
+      hideInteractionButtons: true,
     });
   });
 
@@ -141,6 +147,8 @@ describe("processing settings", () => {
         fullContentOutput: false,
         videoMode: "slide",
         scrollSpeed: 3,
+        imageExportRatio: "9:16",
+        hideInteractionButtons: false,
       }),
     ).toThrow("并发数仅支持 5 / 10 / 15 / 20");
     expect(() =>
@@ -151,6 +159,8 @@ describe("processing settings", () => {
         fullContentOutput: false,
         videoMode: "slide",
         scrollSpeed: 3,
+        imageExportRatio: "9:16",
+        hideInteractionButtons: false,
       }),
     ).toThrow("正文页时长仅支持 3 / 4 / 5 / 6 秒");
     expect(repository.getProcessingSettings().concurrency).toBe(5);

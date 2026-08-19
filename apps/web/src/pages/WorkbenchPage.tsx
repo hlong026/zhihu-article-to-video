@@ -1,5 +1,6 @@
 import {
   FileSpreadsheet,
+  Images,
   Import,
   Play,
   Upload,
@@ -59,9 +60,8 @@ export function WorkbenchPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [workbench, setWorkbench] = useState<WorkbenchData | null>(null);
   const [selectedTask, setSelectedTask] = useState<ArticleTask | null>(null);
-  const [selectedDetail, setSelectedDetail] = useState<ArticleTaskDetail | null>(
-    null,
-  );
+  const [selectedDetail, setSelectedDetail] =
+    useState<ArticleTaskDetail | null>(null);
   const [keyword, setKeyword] = useState("");
   const [tailTemplate, setTailTemplate] = useState("");
   const keywordTaskIdRef = useRef<string | null>(null);
@@ -82,7 +82,9 @@ export function WorkbenchPage() {
     if (task && keywordTaskIdRef.current !== task.id) {
       keywordTaskIdRef.current = task.id;
       setKeyword(task.articleKeyword ?? "");
-      setTailTemplate(task.tailNoteTemplate ?? "来知乎搜索🔍{文章口令}可以看到全文");
+      setTailTemplate(
+        task.tailNoteTemplate ?? "来知乎搜索🔍{文章口令}可以看到全文",
+      );
     }
     if (!task) {
       keywordTaskIdRef.current = null;
@@ -150,7 +152,9 @@ export function WorkbenchPage() {
   function selectTask(task: ArticleTask) {
     keywordTaskIdRef.current = task.id;
     setKeyword(task.articleKeyword ?? "");
-    setTailTemplate(task.tailNoteTemplate ?? "来知乎搜索🔍{文章口令}可以看到全文");
+    setTailTemplate(
+      task.tailNoteTemplate ?? "来知乎搜索🔍{文章口令}可以看到全文",
+    );
     setSelectedTask(task);
   }
 
@@ -479,25 +483,19 @@ export function WorkbenchPage() {
                       .downloadBatchVideos(workbench.batch.id)
                       .then((savedPath) =>
                         toast(
-                          savedPath
-                            ? `已保存到：${savedPath}`
-                            : "已取消保存。",
+                          savedPath ? `已保存到：${savedPath}` : "已取消保存。",
                           savedPath ? "success" : "info",
                         ),
                       )
                       .catch((error: unknown) =>
                         toast(
-                          error instanceof Error
-                            ? error.message
-                            : "下载失败。",
+                          error instanceof Error ? error.message : "下载失败。",
                           "error",
                         ),
                       );
                   } else {
                     window.open(
-                      apiClient.getBatchVideosDownloadUrl(
-                        workbench.batch.id,
-                      ),
+                      apiClient.getBatchVideosDownloadUrl(workbench.batch.id),
                       "_blank",
                       "noopener,noreferrer",
                     );
@@ -507,6 +505,38 @@ export function WorkbenchPage() {
               >
                 <Video size={14} />
                 下载全部视频
+              </button>
+              <button
+                type="button"
+                className="button button-secondary button-sm"
+                onClick={() => {
+                  if (window.desktop) {
+                    window.desktop
+                      .downloadBatchImages(workbench.batch.id)
+                      .then((savedPath) =>
+                        toast(
+                          savedPath ? `已保存到：${savedPath}` : "已取消保存。",
+                          savedPath ? "success" : "info",
+                        ),
+                      )
+                      .catch((error: unknown) =>
+                        toast(
+                          error instanceof Error ? error.message : "下载失败。",
+                          "error",
+                        ),
+                      );
+                  } else {
+                    window.open(
+                      apiClient.getBatchImagesDownloadUrl(workbench.batch.id),
+                      "_blank",
+                      "noopener,noreferrer",
+                    );
+                  }
+                }}
+                disabled={workbench.batch.completedCount === 0}
+              >
+                <Images size={14} />
+                下载全部图片
               </button>
             </div>
             <div className="metrics-row">

@@ -10,7 +10,12 @@ import type {
   SourceType,
   TaskStatus,
 } from "@zhihu-video/contracts";
-import { processingConcurrencyOptions, bodyPageDurationOptions, coverPageDurationOptions } from "@zhihu-video/contracts";
+import {
+  processingConcurrencyOptions,
+  bodyPageDurationOptions,
+  coverPageDurationOptions,
+  imageExportRatios,
+} from "@zhihu-video/contracts";
 
 import type { SqliteDatabase } from "./database.js";
 import type { ImportRowError, ImportTaskInput } from "./importer.js";
@@ -43,6 +48,8 @@ export const DEFAULT_PROCESSING_SETTINGS: ProcessingSettings = {
   fullContentOutput: false,
   videoMode: "slide",
   scrollSpeed: 3,
+  imageExportRatio: "9:16",
+  hideInteractionButtons: false,
 };
 
 export const DEFAULT_AI_SETTINGS: AiSettings = {
@@ -634,9 +641,9 @@ export class TaskRepository {
     if (!row) return { ...DEFAULT_PROCESSING_SETTINGS };
     try {
       const parsed = JSON.parse(row.value) as Partial<ProcessingSettings>;
-      const concurrency = (processingConcurrencyOptions as readonly number[]).includes(
-        Number(parsed.concurrency),
-      )
+      const concurrency = (
+        processingConcurrencyOptions as readonly number[]
+      ).includes(Number(parsed.concurrency))
         ? Number(parsed.concurrency)
         : DEFAULT_PROCESSING_SETTINGS.concurrency;
       const coverPageDurationSeconds = (
@@ -663,7 +670,22 @@ export class TaskRepository {
         parsed.scrollSpeed <= 5
           ? Math.round(parsed.scrollSpeed)
           : DEFAULT_PROCESSING_SETTINGS.scrollSpeed;
-      return { concurrency, coverPageDurationSeconds, bodyPageDurationSeconds, fullContentOutput, videoMode, scrollSpeed };
+      const imageExportRatio =
+        parsed.imageExportRatio === "3:4" ? "3:4" : "9:16";
+      const hideInteractionButtons =
+        typeof parsed.hideInteractionButtons === "boolean"
+          ? parsed.hideInteractionButtons
+          : DEFAULT_PROCESSING_SETTINGS.hideInteractionButtons;
+      return {
+        concurrency,
+        coverPageDurationSeconds,
+        bodyPageDurationSeconds,
+        fullContentOutput,
+        videoMode,
+        scrollSpeed,
+        imageExportRatio,
+        hideInteractionButtons,
+      };
     } catch {
       return { ...DEFAULT_PROCESSING_SETTINGS };
     }
@@ -725,6 +747,13 @@ export class TaskRepository {
     if (settings.scrollSpeed < 1 || settings.scrollSpeed > 5) {
       throw new Error("滚动速度仅支持 1~5。");
     }
+    if (
+      !(imageExportRatios as readonly string[]).includes(
+        settings.imageExportRatio,
+      )
+    ) {
+      throw new Error("图片比例仅支持 9:16 或 3:4。");
+    }
     this.database
       .prepare(
         `INSERT INTO app_settings (key, value, updated_at)
@@ -740,19 +769,18 @@ export class TaskRepository {
    * updateTaskExecution this never changes the task status, so the pipeline
    * can stream sub-step updates (per-card image rendering, encoding start).
    */
-  reportTaskProgress(
-    taskId: string,
-    progress: number,
-    message?: string,
-  ): void {
+  reportTaskProgress(taskId: string, progress: number, message?: string): void {
     const clamped = Math.max(0, Math.min(100, Math.round(progress)));
     const timestamp = now();
     this.database
-      .prepare("UPDATE article_tasks SET progress = ?, updated_at = ? WHERE id = ?")
+      .prepare(
+        "UPDATE article_tasks SET progress = ?, updated_at = ? WHERE id = ?",
+      )
       .run(clamped, timestamp, taskId);
     if (message) {
       const task = this.getTask(taskId);
-      if (task) this.logAttempt(taskId, task.step, "progress", message, timestamp);
+      if (task)
+        this.logAttempt(taskId, task.step, "progress", message, timestamp);
     }
   }
 
@@ -764,8 +792,7 @@ export class TaskRepository {
     const row = this.database
       .prepare("SELECT id, status, output_dir FROM article_tasks WHERE id = ?")
       .get(taskId) as
-      | { id: string; status: TaskStatus; output_dir: string | null }
-      | undefined;
+      { id: string; status: TaskStatus; output_dir: string | null } | undefined;
     if (!row) return null;
     const outputDirectory = row.output_dir;
     this.database.transaction(() => {
@@ -783,7 +810,10 @@ export class TaskRepository {
    * Batch-deletes multiple tasks. Returns the list of output directories that
    * should be cleaned up by the caller.
    */
-  deleteTasks(taskIds: string[]): { deletedCount: number; outputDirectories: string[] } {
+  deleteTasks(taskIds: string[]): {
+    deletedCount: number;
+    outputDirectories: string[];
+  } {
     const outputDirectories: string[] = [];
     let deletedCount = 0;
     this.database.transaction(() => {
@@ -832,9 +862,7 @@ export class TaskRepository {
       this.database
         .prepare("DELETE FROM import_errors WHERE batch_id = ?")
         .run(batchId);
-      this.database
-        .prepare("DELETE FROM batches WHERE id = ?")
-        .run(batchId);
+      this.database.prepare("DELETE FROM batches WHERE id = ?").run(batchId);
     })();
     return { outputDirectories };
   }

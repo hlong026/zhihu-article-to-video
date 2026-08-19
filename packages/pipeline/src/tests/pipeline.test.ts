@@ -3,6 +3,7 @@ import {
   buildFfmpegScrollOverlayCommand,
   buildFfmpegVideoCommand,
   buildPreparedVideo,
+  cardHeights,
   cleanReadableContent,
   classifyZhihuUrl,
   countBodyCharacters,
@@ -18,6 +19,7 @@ import {
   scrollSpeedToPixelsPerSecond,
   simplifyMathMarkup,
   truncateVideoTitle,
+  writePngCardsAtRatio,
   writeSummaryPngCards,
   writeSummarySvgCards,
   writeZhihuReadingPagePngs,
@@ -27,10 +29,10 @@ import {
   SCROLL_VIEWPORT_HEIGHT,
   type VideoSummary,
 } from "../index.js";
+import sharp from "sharp";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import sharp from "sharp";
 
 function equal<T>(actual: T, expected: T, message: string): void {
   if (actual !== expected) {
@@ -1538,5 +1540,123 @@ export async function runPipelineTests(): Promise<void> {
     shortFilterArg?.includes("(t-1.5)*80"),
     true,
     "custom opening dwell should be reflected in the crop timing",
+  );
+
+  // ─── Image export ratio (3:4) and hidden interaction buttons ───────────
+  deepEqual(
+    cardHeights,
+    { "9:16": 1920, "3:4": 1440 },
+    "cardHeights should map both export ratios to canvas heights",
+  );
+
+  const ratioCards = buildCardSequence(validSummary, "三个方法", {
+    height: cardHeights["3:4"],
+  });
+  deepEqual(
+    ratioCards[0]?.canvas,
+    { width: 1080, height: 1440 },
+    "3:4 cards should use a 1080x1440 canvas",
+  );
+  deepEqual(
+    ratioCards.map((card) => card.canvas.height),
+    [1440, 1440, 1440, 1440],
+    "every 3:4 card should share the shortened canvas",
+  );
+
+  const ratioSvg = renderSummarySvgCards(validSummary, "三个方法", {
+    height: cardHeights["3:4"],
+  });
+  equal(
+    ratioSvg[0]?.svg.includes('width="1080" height="1440"'),
+    true,
+    "3:4 SVG should declare the 1080x1440 canvas",
+  );
+  equal(
+    ratioSvg[3]?.svg.includes("来知乎搜索「三个方法」看全文"),
+    true,
+    "3:4 body cards should still carry the CTA overlay",
+  );
+
+  const hiddenSvg = renderSummarySvgCards(metaSummary, "三个方法", {
+    hideInteractionButtons: true,
+  });
+  equal(
+    hiddenSvg[0]?.svg.includes("+ 关注"),
+    false,
+    "hidden mode should drop the decorative follow pill from the cover",
+  );
+  equal(
+    hiddenSvg[0]?.svg.includes("摸鱼作家"),
+    true,
+    "hidden mode should keep the author name",
+  );
+  equal(
+    hiddenSvg[0]?.svg.includes("知乎 · 278 个回答 · 623 关注"),
+    true,
+    "hidden mode should keep the answer/follow counters line",
+  );
+  equal(
+    hiddenSvg[0]?.svg.includes("data:image/jpeg;base64,QUJD"),
+    true,
+    "hidden mode should keep the avatar image",
+  );
+
+  const ratioPngDirectory = await mkdtemp(join(tmpdir(), "zhihu-video-ratio-"));
+  try {
+    const threeQuarterPngs = await writePngCardsAtRatio(
+      ratioPngDirectory,
+      validSummary,
+      "三个方法",
+      "3:4",
+    );
+    equal(threeQuarterPngs.length, 4, "3:4 export should rasterize every card");
+    const threeQuarterMeta = await sharp(
+      threeQuarterPngs[0]!.outputPath,
+    ).metadata();
+    equal(threeQuarterMeta.width, 1080, "3:4 PNG width should stay 1080");
+    equal(threeQuarterMeta.height, 1440, "3:4 PNG height should be 1440");
+
+    const nineSixteenPngs = await writePngCardsAtRatio(
+      ratioPngDirectory,
+      validSummary,
+      "三个方法",
+      "9:16",
+    );
+    const nineSixteenMeta = await sharp(
+      nineSixteenPngs[0]!.outputPath,
+    ).metadata();
+    equal(
+      nineSixteenMeta.height,
+      1920,
+      "9:16 export should keep the original canvas height",
+    );
+  } finally {
+    await rm(ratioPngDirectory, { recursive: true, force: true });
+  }
+
+  const legacyTailSvg = renderSummarySvgCards(
+    validSummary,
+    "三个方法",
+    undefined,
+    "知乎搜索「{文章口令}」",
+  );
+  equal(
+    legacyTailSvg[3]?.svg.includes("知乎搜索「三个方法」"),
+    true,
+    "legacy string tailTemplate calls should keep working",
+  );
+
+  const shortPage = paginateParagraphs(["一".repeat(18 * 15)], {
+    linesPerPage: 14,
+  });
+  equal(
+    shortPage.pages.length,
+    2,
+    "a custom linesPerPage should drive 3:4 pagination",
+  );
+  equal(
+    shortPage.pages[0]?.body.split("\n").length,
+    14,
+    "3:4 pages should hold fourteen lines",
   );
 }

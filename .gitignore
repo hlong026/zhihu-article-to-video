@@ -7,6 +7,8 @@ playwright-report/
 test-results/
 apps/desktop/out/
 apps/desktop/.stage/
+apps/title2link/renderer-dist/
+apps/title2link/release/
 packages/pipeline/dist-test/
 data/
 outputs/

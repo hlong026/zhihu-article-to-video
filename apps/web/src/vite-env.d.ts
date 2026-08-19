@@ -61,6 +61,7 @@ declare global {
       downloadImages(taskId: string): Promise<string | null>;
       downloadBatch(batchId: string): Promise<string | null>;
       downloadBatchVideos(batchId: string): Promise<string | null>;
+      downloadBatchImages(batchId: string): Promise<string | null>;
       downloadResultWorkbook(batchId: string): Promise<string | null>;
       getBgm(): Promise<BgmSettingsView>;
       updateBgm(patch: {
@@ -82,6 +83,8 @@ declare global {
         fullContentOutput?: boolean;
         videoMode?: "slide" | "scroll";
         scrollSpeed?: number;
+        imageExportRatio?: "9:16" | "3:4";
+        hideInteractionButtons?: boolean;
       }): Promise<ProcessingSettings>;
     };
   }

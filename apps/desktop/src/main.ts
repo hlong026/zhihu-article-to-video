@@ -119,7 +119,11 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle("desktop:update-keyword", async (_event, input: unknown) => {
     if (!isKeywordUpdate(input)) throw new Error("口令参数无效。");
-    return requireApi().updateKeyword(input.taskId, input.articleKeyword, input.tailNoteTemplate);
+    return requireApi().updateKeyword(
+      input.taskId,
+      input.articleKeyword,
+      input.tailNoteTemplate,
+    );
   });
 
   ipcMain.handle("desktop:rerender-tail", async (_event, taskId: unknown) => {
@@ -247,6 +251,23 @@ function registerIpcHandlers(): void {
   );
 
   ipcMain.handle(
+    "desktop:download-batch-images",
+    async (_event, batchId: unknown) => {
+      if (typeof batchId !== "string" || batchId.length === 0) {
+        throw new Error("批次参数无效。");
+      }
+      return saveAssetWithDialog(
+        await requireApi().downloadBatchImages(batchId),
+        {
+          title: "保存全部图片 ZIP",
+          filterName: "ZIP 压缩包",
+          extensions: ["zip"],
+        },
+      );
+    },
+  );
+
+  ipcMain.handle(
     "desktop:download-result-workbook",
     async (_event, batchId: unknown) => {
       if (typeof batchId !== "string" || batchId.length === 0) {
@@ -288,10 +309,13 @@ function registerIpcHandlers(): void {
     requireApi().getProcessing(),
   );
 
-  ipcMain.handle("desktop:update-processing", async (_event, patch: unknown) => {
-    if (!isProcessingPatch(patch)) throw new Error("处理设置参数无效。");
-    return requireApi().updateProcessing(patch);
-  });
+  ipcMain.handle(
+    "desktop:update-processing",
+    async (_event, patch: unknown) => {
+      if (!isProcessingPatch(patch)) throw new Error("处理设置参数无效。");
+      return requireApi().updateProcessing(patch);
+    },
+  );
 }
 
 /** Prompts for a destination and writes the asset; null when cancelled. */
@@ -329,7 +353,11 @@ function isImportRequest(
 
 function isKeywordUpdate(
   value: unknown,
-): value is { taskId: string; articleKeyword: string; tailNoteTemplate?: string } {
+): value is {
+  taskId: string;
+  articleKeyword: string;
+  tailNoteTemplate?: string;
+} {
   return (
     typeof value === "object" &&
     value !== null &&
@@ -380,8 +408,7 @@ function isProcessingPatch(value: unknown): value is {
     (patch.videoMode === undefined ||
       patch.videoMode === "slide" ||
       patch.videoMode === "scroll") &&
-    (patch.scrollSpeed === undefined ||
-      typeof patch.scrollSpeed === "number")
+    (patch.scrollSpeed === undefined || typeof patch.scrollSpeed === "number")
   );
 }
 
@@ -448,12 +475,7 @@ function getBundledChromiumExecutable(): string | undefined {
  * to the system PATH.
  */
 function getBundledFfmpegExecutable(): string | undefined {
-  const manifestPath = join(
-    currentDirectory,
-    "api",
-    "ffmpeg",
-    "manifest.json",
-  );
+  const manifestPath = join(currentDirectory, "api", "ffmpeg", "manifest.json");
   try {
     if (!existsSync(manifestPath)) return undefined;
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {

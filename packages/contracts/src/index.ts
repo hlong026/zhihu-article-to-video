@@ -174,6 +174,10 @@ export const coverPageDurationOptions = [1, 2, 3, 4, 5] as const;
 /** Body-page dwell-time presets (seconds) offered in the workbench card. */
 export const bodyPageDurationOptions = [3, 4, 5, 6] as const;
 
+/** Image export aspect ratios for download (video stays 9:16). */
+export const imageExportRatios = ["9:16", "3:4"] as const;
+export type ImageExportRatio = (typeof imageExportRatios)[number];
+
 /** Video playback mode: horizontal slide (page-by-page) or vertical scroll. */
 export type VideoMode = "slide" | "scroll";
 
@@ -199,6 +203,11 @@ export interface ProcessingSettings {
   videoMode: VideoMode;
   /** Vertical scroll speed 1~5 (only used when videoMode === "scroll"). */
   scrollSpeed: number;
+  /** Image export aspect ratio for downloads (video stays 9:16). */
+  imageExportRatio: ImageExportRatio;
+  /** Hide decorative interaction buttons (+关注/点赞 icons) across all cards.
+   * Author info (avatar/name/badge) remains visible. */
+  hideInteractionButtons: boolean;
 }
 
 /**

@@ -1,4 +1,6 @@
 import { createReadStream, existsSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { tmpdir } from "node:os";
 import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
 
@@ -7,7 +9,18 @@ import { ZipArchive } from "archiver";
 import Fastify, { type FastifyInstance } from "fastify";
 import { ZodError, z } from "zod";
 
-import type { TaskArtifactsSummary } from "@zhihu-video/contracts";
+import type {
+  AiSettingsView,
+  ImageExportRatio,
+  ProcessingSettings,
+  TaskArtifactsSummary,
+} from "@zhihu-video/contracts";
+import {
+  paginateParagraphs,
+  truncateVideoTitle,
+  writePngCardsAtRatio,
+  type VideoSummary,
+} from "@zhihu-video/pipeline";
 
 import { openDatabase } from "./database.js";
 import {
@@ -27,7 +40,12 @@ import {
   taskExportBaseName,
 } from "./batch-export.js";
 import { parseImportWorkbook } from "./importer.js";
-import { OpenAiCompatibleSummaryGenerator, defaultAiBaseUrl, defaultAiModel, resolveAiConfiguration } from "./openai-summary.js";
+import {
+  OpenAiCompatibleSummaryGenerator,
+  defaultAiBaseUrl,
+  defaultAiModel,
+  resolveAiConfiguration,
+} from "./openai-summary.js";
 import { resolveBrowserLaunch } from "./browser-resolver.js";
 import { resolveFfmpegExecutable } from "./ffmpeg-resolver.js";
 import {
@@ -35,9 +53,12 @@ import {
   TaskRepository,
   type TaskDownloadInfo,
 } from "./repository.js";
-import type { AiSettingsView } from "@zhihu-video/contracts";
 import { TaskStateError } from "./task-state.js";
-import { TaskWorker, type RerenderTailResult } from "./task-worker.js";
+import {
+  TaskWorker,
+  readSnapshotContent,
+  type RerenderTailResult,
+} from "./task-worker.js";
 import {
   PlaywrightZhihuContentReader,
   readBrowserConfiguration,
@@ -119,12 +140,9 @@ const processingUpdateSchema = z
       .optional(),
     fullContentOutput: z.boolean().optional(),
     videoMode: z.enum(["slide", "scroll"]).optional(),
-    scrollSpeed: z
-      .number()
-      .int()
-      .min(1)
-      .max(5)
-      .optional(),
+    scrollSpeed: z.number().int().min(1).max(5).optional(),
+    imageExportRatio: z.enum(["9:16", "3:4"]).optional(),
+    hideInteractionButtons: z.boolean().optional(),
   })
   .strict();
 
@@ -251,6 +269,116 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
           },
         })
       : null);
+
+  /**
+   * Re-renders a completed task's card images at the requested aspect ratio,
+   * rebuilding the summary from the persisted article snapshot. Returns the
+   * directory holding the freshly rendered PNGs, or null when the task has
+   * no reusable snapshot/keyword (caller should fall back to existing PNGs).
+   */
+  const renderExportImages = async (
+    taskId: string,
+    outputDirectory: string,
+    ratio: ImageExportRatio,
+    hideButtons: boolean,
+    fullContentOutput: boolean,
+    tempRoot: string,
+  ): Promise<string | null> => {
+    const task = repository.getTask(taskId);
+    if (!task) return null;
+    const keyword = task.articleKeyword?.trim();
+    if (!keyword) return null;
+    const snapshot = task.manualContent
+      ? null
+      : await readSnapshotContent(outputDirectory);
+    const content = task.manualContent ?? snapshot;
+    if (!content) return null;
+    // 3:4 canvas is shorter, so fewer lines fit per body page.
+    const { pages, truncated } = paginateParagraphs(content.paragraphs, {
+      linesPerPage: ratio === "3:4" ? 14 : undefined,
+      maxPages: fullContentOutput ? Number.POSITIVE_INFINITY : undefined,
+    });
+    const summary: VideoSummary = {
+      sourceTitle: content.title,
+      videoTitle: task.finalTitle ?? truncateVideoTitle(content.title),
+      tags: task.finalTags,
+      pages,
+      truncated,
+      riskFlags: [],
+      coverMeta: snapshot?.meta ?? null,
+    };
+    const targetDir = join(tempRoot, taskId);
+    await writePngCardsAtRatio(
+      targetDir,
+      summary,
+      keyword,
+      ratio,
+      hideButtons,
+      task.tailNoteTemplate,
+    );
+    return targetDir;
+  };
+
+  /**
+   * Creates the per-request temp directory for image re-renders and hooks its
+   * cleanup to the archive lifecycle (archiver reads files lazily during
+   * finalize, so the directory must outlive the response setup).
+   */
+  const createExportTempRoot = (archive: ZipArchive): string => {
+    const tempRoot = join(
+      options.outputDirectory ?? tmpdir(),
+      `.export-images-${randomUUID()}`,
+    );
+    const cleanup = () =>
+      rm(tempRoot, { recursive: true, force: true }).catch(() => undefined);
+    archive.once("end", cleanup);
+    archive.once("error", cleanup);
+    return tempRoot;
+  };
+
+  /**
+   * Resolves the directory whose PNGs should be archived for a completed
+   * task: the renders produced at task time on the 9:16 fast path, otherwise
+   * a fresh re-render at the configured ratio (falling back to existing
+   * PNGs when the snapshot or keyword is unavailable).
+   */
+  const resolveExportImagesDir = async (
+    taskId: string,
+    outputDirectory: string,
+    settings: ProcessingSettings,
+    tempRoot: string,
+  ): Promise<string | null> => {
+    const existingImagesDir = join(outputDirectory, "images");
+    const hasExistingImages =
+      existsSync(existingImagesDir) &&
+      (await readdir(existingImagesDir).catch(() => [] as string[])).some(
+        (file) => file.toLowerCase().endsWith(".png"),
+      );
+    // Fast path: reuse the renders produced at task time when they already
+    // match the requested output (9:16 with decorative buttons visible).
+    if (
+      settings.imageExportRatio === "9:16" &&
+      !settings.hideInteractionButtons &&
+      hasExistingImages
+    ) {
+      return existingImagesDir;
+    }
+    let rendered: string | null = null;
+    try {
+      rendered = await renderExportImages(
+        taskId,
+        outputDirectory,
+        settings.imageExportRatio,
+        settings.hideInteractionButtons,
+        settings.fullContentOutput,
+        tempRoot,
+      );
+    } catch (error) {
+      app.log.warn(error, `任务 ${taskId} 图片重渲染失败，回退现有图片`);
+    }
+    if (rendered) return rendered;
+    return hasExistingImages ? existingImagesDir : null;
+  };
 
   app.addContentTypeParser(
     xlsxContentType,
@@ -457,6 +585,8 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
       const archive = new ZipArchive({ zlib: { level: 9 } });
       archive.on("error", (error) => app.log.error(error, "批次 ZIP 打包失败"));
       archive.append(await buildResultWorkbook(tasks), { name: "result.xlsx" });
+      const settings = repository.getProcessingSettings();
+      const tempRoot = createExportTempRoot(archive);
       for (const { task, index } of exportable) {
         const baseName = taskExportBaseName(task, index);
         const outputDirectory = resolve(task.outputDirectory!);
@@ -464,9 +594,14 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
         if (existsSync(videoPath)) {
           archive.file(videoPath, { name: `${baseName}/video.mp4` });
         }
-        const imagesDirectory = join(outputDirectory, "images");
-        if (existsSync(imagesDirectory)) {
-          archive.directory(imagesDirectory, `${baseName}/images`);
+        const imagesDir = await resolveExportImagesDir(
+          task.id,
+          outputDirectory,
+          settings,
+          tempRoot,
+        );
+        if (imagesDir) {
+          archive.directory(imagesDir, `${baseName}/images`);
         }
       }
       reply.header("content-type", "application/zip");
@@ -532,6 +667,66 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
     },
   );
 
+  // Downloads all rendered images of all completed tasks in a batch.
+  app.get<{ Params: { id: string } }>(
+    "/api/batches/:id/download-images",
+    async (request, reply) => {
+      const batch = repository.getBatch(request.params.id);
+      if (!batch) {
+        return reply
+          .status(404)
+          .send({ error: "BATCH_NOT_FOUND", message: "批次不存在" });
+      }
+      const tasks = repository.listBatchTaskExports(request.params.id);
+      const exportable = tasks
+        .map((task, index) => ({ task, index }))
+        .filter(
+          ({ task }) => task.status === "completed" && task.outputDirectory,
+        )
+        .filter(({ task }) =>
+          isInsideOutputRoot(task.outputDirectory!, options.outputDirectory),
+        );
+      if (exportable.length === 0) {
+        return reply.status(409).send({
+          error: "BATCH_NOT_COMPLETED",
+          message: "批次内暂无已完成任务，无法下载图片。",
+        });
+      }
+
+      const settings = repository.getProcessingSettings();
+      const archive = new ZipArchive({ zlib: { level: 9 } });
+      archive.on("error", (error) =>
+        app.log.error(error, "批次图片 ZIP 打包失败"),
+      );
+      const tempRoot = createExportTempRoot(archive);
+
+      for (const { task, index } of exportable) {
+        const baseName = taskExportBaseName(task, index);
+        const outputDirectory = resolve(task.outputDirectory!);
+        const imagesDir = await resolveExportImagesDir(
+          task.id,
+          outputDirectory,
+          settings,
+          tempRoot,
+        );
+        if (imagesDir) {
+          archive.directory(imagesDir, `${baseName}/images`);
+        }
+      }
+
+      reply.header("content-type", "application/zip");
+      reply.header(
+        "content-disposition",
+        contentDisposition(
+          `${batchExportBaseName(batch.sourceFileName)}-全部图片.zip`,
+        ),
+      );
+      reply.send(archive);
+      void archive.finalize();
+      return reply;
+    },
+  );
+
   app.get<{ Params: { id: string } }>(
     "/api/batches/:id/result.xlsx",
     async (request, reply) => {
@@ -579,7 +774,9 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
       if (result?.outputDirectory) {
         const dir = resolve(result.outputDirectory);
         if (isInsideOutputRoot(dir, options.outputDirectory)) {
-          await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+          await rm(dir, { recursive: true, force: true }).catch(
+            () => undefined,
+          );
         }
       }
       return { ok: true };
@@ -613,7 +810,9 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
     for (const dir of outputDirectories) {
       const resolved = resolve(dir);
       if (isInsideOutputRoot(resolved, options.outputDirectory)) {
-        await rm(resolved, { recursive: true, force: true }).catch(() => undefined);
+        await rm(resolved, { recursive: true, force: true }).catch(
+          () => undefined,
+        );
       }
     }
     return { ok: true, deletedCount };
@@ -649,7 +848,9 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
         for (const dir of result.outputDirectories) {
           const resolved = resolve(dir);
           if (isInsideOutputRoot(resolved, options.outputDirectory)) {
-            await rm(resolved, { recursive: true, force: true }).catch(() => undefined);
+            await rm(resolved, { recursive: true, force: true }).catch(
+              () => undefined,
+            );
           }
         }
       }
@@ -845,16 +1046,22 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
       if (typeof outputDirectory === "number") {
         return reply.status(outputDirectory).send(downloadErrorBody(task));
       }
-      const imagesDirectory = join(outputDirectory, "images");
-      const files = await readdir(imagesDirectory).catch(() => [] as string[]);
-      if (!files.some((file) => file.toLowerCase().endsWith(".png"))) {
+      const settings = repository.getProcessingSettings();
+      const archive = new ZipArchive({ zlib: { level: 9 } });
+      archive.on("error", (error) => app.log.error(error, "图片 ZIP 打包失败"));
+      const tempRoot = createExportTempRoot(archive);
+      const imagesDirectory = await resolveExportImagesDir(
+        task.id,
+        outputDirectory,
+        settings,
+        tempRoot,
+      );
+      if (!imagesDirectory) {
         return reply.status(404).send({
           error: "ARTIFACT_NOT_FOUND",
           message: "图片产物不存在，可能已被清理，请重试该任务。",
         });
       }
-      const archive = new ZipArchive({ zlib: { level: 9 } });
-      archive.on("error", (error) => app.log.error(error, "图片 ZIP 打包失败"));
       reply.header("content-type", "application/zip");
       reply.header(
         "content-disposition",
@@ -879,7 +1086,10 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
     if (!path) {
       return reply
         .status(404)
-        .send({ error: "AUDIO_NOT_FOUND", message: "当前没有可试听的背景音乐。" });
+        .send({
+          error: "AUDIO_NOT_FOUND",
+          message: "当前没有可试听的背景音乐。",
+        });
     }
     reply.header("content-type", audioContentType(path));
     reply.header("cache-control", "no-store");
@@ -894,7 +1104,10 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
       if (!preset) {
         return reply
           .status(400)
-          .send({ error: "PRESET_NOT_FOUND", message: "所选背景音乐预设不存在" });
+          .send({
+            error: "PRESET_NOT_FOUND",
+            message: "所选背景音乐预设不存在",
+          });
       }
       next.source = "preset";
       next.presetId = preset.id;
@@ -919,7 +1132,10 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
     }
     const directory = bgmUploadsDirectory(options.databasePath);
     await mkdir(directory, { recursive: true });
-    const targetPath = uploadedFilePath(options.databasePath, uploaded.fileName);
+    const targetPath = uploadedFilePath(
+      options.databasePath,
+      uploaded.fileName,
+    );
     // A new upload replaces any prior track, including one with another
     // extension, so only a single "current" file ever remains on disk.
     for (const extension of ALLOWED_AUDIO_EXTENSIONS) {
@@ -955,6 +1171,9 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
       fullContentOutput: input.fullContentOutput ?? current.fullContentOutput,
       videoMode: input.videoMode ?? current.videoMode,
       scrollSpeed: input.scrollSpeed ?? current.scrollSpeed,
+      imageExportRatio: input.imageExportRatio ?? current.imageExportRatio,
+      hideInteractionButtons:
+        input.hideInteractionButtons ?? current.hideInteractionButtons,
     });
   });
 
@@ -980,8 +1199,10 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
   app.put("/api/settings/ai", async (request): Promise<AiSettingsView> => {
     const input = aiUpdateSchema.parse(request.body);
     const current = repository.getAiSettings();
-    const trimOrNull = (v: string | null | undefined, fallback: string | null) =>
-      v === undefined ? fallback : (v ?? "").trim() || null;
+    const trimOrNull = (
+      v: string | null | undefined,
+      fallback: string | null,
+    ) => (v === undefined ? fallback : (v ?? "").trim() || null);
     const next = {
       apiKey: trimOrNull(input.apiKey, current.apiKey),
       baseUrl: trimOrNull(input.baseUrl, current.baseUrl),

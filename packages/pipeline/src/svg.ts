@@ -5,7 +5,9 @@ import sharp from "sharp";
 import {
   buildCardSequence,
   cardCanvas,
+  cardHeights,
   type CardRenderModel,
+  type CardRenderOptions,
 } from "./cards.js";
 import type { VideoSummary } from "./summary.js";
 
@@ -46,12 +48,11 @@ export function svgCardFilename(card: CardRenderModel): string {
 }
 
 export function renderSvgCard(card: CardRenderModel): string {
-  const content =
-    card.kind === "cover" ? renderCover(card) : renderBody(card);
+  const content = card.kind === "cover" ? renderCover(card) : renderBody(card);
 
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${cardCanvas.width}" height="${cardCanvas.height}" viewBox="0 0 ${cardCanvas.width} ${cardCanvas.height}" role="img">`,
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${card.canvas.width}" height="${card.canvas.height}" viewBox="0 0 ${card.canvas.width} ${card.canvas.height}" role="img">`,
     "<style>text { font-family: 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif; }</style>",
     content,
     "</svg>",
@@ -65,22 +66,33 @@ export function renderSvgCard(card: CardRenderModel): string {
 export function renderSummarySvgCards(
   summary: VideoSummary,
   keyword: string,
+  options?: CardRenderOptions | string, // allow legacy tailTemplate arg
+  tailTemplate?: string,
+): SvgCard[];
+
+export function renderSummarySvgCards(
+  summary: VideoSummary,
+  keyword: string,
+  options?: CardRenderOptions | string,
   tailTemplate?: string,
 ): SvgCard[] {
-  return buildCardSequence(summary, keyword, tailTemplate).map((card) => ({
-    card,
-    filename: svgCardFilename(card),
-    svg: renderSvgCard(card),
-  }));
+  return buildCardSequence(summary, keyword, options, tailTemplate).map(
+    (card) => ({
+      card,
+      filename: svgCardFilename(card),
+      svg: renderSvgCard(card),
+    }),
+  );
 }
 
 export async function writeSummarySvgCards(
   outputDirectory: string,
   summary: VideoSummary,
   keyword: string,
+  options?: CardRenderOptions | string, // allow legacy tailTemplate arg
   tailTemplate?: string,
 ): Promise<WrittenSvgCard[]> {
-  const cards = renderSummarySvgCards(summary, keyword, tailTemplate);
+  const cards = renderSummarySvgCards(summary, keyword, options, tailTemplate);
   await mkdir(outputDirectory, { recursive: true });
 
   return Promise.all(
@@ -102,9 +114,10 @@ export async function writeSummaryPngCards(
   summary: VideoSummary,
   keyword: string,
   onCardWritten?: (done: number, total: number) => void,
+  options?: CardRenderOptions | string, // allow legacy tailTemplate arg
   tailTemplate?: string,
 ): Promise<WrittenPngCard[]> {
-  const cards = renderSummarySvgCards(summary, keyword, tailTemplate);
+  const cards = renderSummarySvgCards(summary, keyword, options, tailTemplate);
   await mkdir(outputDirectory, { recursive: true });
 
   let done = 0;
@@ -115,13 +128,41 @@ export async function writeSummaryPngCards(
         card.filename.replace(/\.svg$/, ".png"),
       );
       await sharp(Buffer.from(card.svg, "utf8"))
-        .resize(cardCanvas.width, cardCanvas.height, { fit: "fill" })
+        .resize(card.card.canvas.width, card.card.canvas.height, {
+          fit: "fill",
+        })
         .png()
         .toFile(outputPath);
       done += 1;
       onCardWritten?.(done, cards.length);
       return { ...card, outputPath };
     }),
+  );
+}
+
+/**
+ * Export PNG cards at a specific aspect ratio with optional button hiding.
+ * This is the entry point for download features (3:4 or 9:16).
+ */
+export async function writePngCardsAtRatio(
+  outputDirectory: string,
+  summary: VideoSummary,
+  keyword: string,
+  ratio: "9:16" | "3:4",
+  hideInteractionButtons?: boolean,
+  tailTemplate?: string,
+): Promise<WrittenPngCard[]> {
+  const opts: CardRenderOptions = {
+    height: cardHeights[ratio],
+    hideInteractionButtons,
+  };
+  return writeSummaryPngCards(
+    outputDirectory,
+    summary,
+    keyword,
+    undefined,
+    opts,
+    tailTemplate,
   );
 }
 
@@ -138,20 +179,25 @@ function renderCover(
   const metaLine = coverMetaLine(card);
   const showAuthor = Boolean(card.meta?.authorName?.trim());
 
-  const zoneTop = 280;
-  const footerTop = 1640;
-  const zoneBottom = footerTop - 80;
-  const titleLineHeight = 112;
-  const titleToMetaGap = 56;
-  const metaFontSize = 40;
+  const canvasHeight = card.canvas.height;
+  // Calculate layout based on canvas height (9:16 vs 3:4)
+  const zoneTop = Math.round(0.15 * canvasHeight); // 15% from top
+  const footerTop = Math.round(0.85 * canvasHeight); // 85% from top
+  const zoneBottom = footerTop - Math.round(0.05 * canvasHeight);
+  const titleLineHeight = Math.round(0.058 * canvasHeight);
+  const titleToMetaGap = Math.round(0.03 * canvasHeight);
+  const metaFontSize = Math.round(0.021 * canvasHeight);
   const blockHeight =
     titleLines.length * titleLineHeight + titleToMetaGap + metaFontSize;
   const titleY =
     zoneTop + Math.max(0, Math.round((zoneBottom - zoneTop - blockHeight) / 2));
   const metaY = titleY + titleLines.length * titleLineHeight + titleToMetaGap;
 
+  const opts = card.opts ?? {};
+  const hideButtons = opts.hideInteractionButtons ?? false;
+
   const parts = [
-    '<rect width="1080" height="1920" fill="#FFFFFF"/>',
+    `<rect width="${card.canvas.width}" height="${canvasHeight}" fill="#FFFFFF"/>`,
     // Zhihu-blue accent bar floating above the title block.
     `<rect x="90" y="${titleY - 100}" width="72" height="10" rx="5" fill="#056DE8"/>`,
     svgText(titleLines, {
@@ -169,7 +215,7 @@ function renderCover(
   // reader captured an author; otherwise tags render as chips filling the
   // same band so the bottom of the card is never blank.
   if (showAuthor && card.meta) {
-    parts.push(renderAuthorBlock(card.meta, footerTop));
+    parts.push(renderAuthorBlock(card.meta, footerTop, hideButtons));
   } else {
     const chips = renderTagChips(card.tags, footerTop);
     if (chips) parts.push(chips);
@@ -226,6 +272,7 @@ function coverMetaLine(
 function renderAuthorBlock(
   meta: NonNullable<Extract<CardRenderModel, { kind: "cover" }>["meta"]>,
   top: number,
+  hideButtons?: boolean,
 ): string {
   const centerY = top + 44;
   const parts: string[] = [
@@ -253,10 +300,13 @@ function renderAuthorBlock(
       `<text x="206" y="${top + 84}" fill="#8590A6" font-size="30">${escapeSvgText(wrapText(badge, 16, 1)[0] ?? "")}</text>`,
     );
   }
-  parts.push(
-    `<rect x="822" y="${top + 12}" width="168" height="64" rx="32" fill="#ECF5FF"/>`,
-    `<text x="906" y="${top + 55}" text-anchor="middle" fill="#056DE8" font-size="32" font-weight="600">+ 关注</text>`,
-  );
+  // Hide the decorative "+关注" button when requested
+  if (!hideButtons) {
+    parts.push(
+      `<rect x="822" y="${top + 12}" width="168" height="64" rx="32" fill="#ECF5FF"/>`,
+      `<text x="906" y="${top + 55}" text-anchor="middle" fill="#056DE8" font-size="32" font-weight="600">+ 关注</text>`,
+    );
+  }
   return parts.join("\n");
 }
 
@@ -264,31 +314,39 @@ function renderBody(card: Extract<CardRenderModel, { kind: "body" }>): string {
   // The body is already paginated into wrapped lines (with blank spacer lines
   // separating paragraphs), so it renders verbatim without re-wrapping.
   const bodyLines = card.body.split("\n");
+  const canvasHeight = card.canvas.height;
+
+  // CTA metrics scale with the canvas height so 9:16 and 3:4 exports keep the
+  // same visual hierarchy.
+  const ctaLineHeight = Math.round(0.06 * canvasHeight);
+  const ctaFontSize = Math.round(0.04 * canvasHeight);
+  const ctaYOffset = Math.round(0.08 * canvasHeight); // padding from top
+
   const parts = [
-    '<rect width="1080" height="1920" fill="#FFFFFF"/>',
+    `<rect width="${card.canvas.width}" height="${canvasHeight}" fill="#FFFFFF"/>`,
     svgText(bodyLines, {
       x: 90,
-      y: 150,
+      y: ctaYOffset,
       fontSize: 48,
       lineHeight: 82,
       fill: "#1A1A1A",
       weight: 400,
     }),
   ];
+
   // CTA overlay: yellow bold text centered on the card with a semi-transparent
   // dark backdrop for readability against the black body text.
   if (card.ctaOverlay) {
     const ctaLines = wrapText(card.ctaOverlay, 14, 3);
-    const lineHeight = 88;
-    const blockHeight = ctaLines.length * lineHeight + 40;
-    const blockTop = (1920 - blockHeight) / 2;
+    const blockHeight = ctaLines.length * ctaLineHeight + 40;
+    const blockTop = (canvasHeight - blockHeight) / 2;
     parts.push(
       `<rect x="60" y="${blockTop}" width="960" height="${blockHeight}" rx="24" fill="rgba(0,0,0,0.72)"/>`,
       svgText(ctaLines, {
         x: 540,
         y: blockTop + 52,
-        fontSize: 56,
-        lineHeight,
+        fontSize: ctaFontSize,
+        lineHeight: ctaLineHeight,
         fill: "#FFD700",
         weight: 700,
         anchor: "middle",

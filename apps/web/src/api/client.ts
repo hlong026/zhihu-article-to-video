@@ -189,6 +189,8 @@ let mockProcessing: ProcessingSettings = {
   fullContentOutput: false,
   videoMode: "slide",
   scrollSpeed: 3,
+  imageExportRatio: "9:16",
+  hideInteractionButtons: false,
 };
 
 let mockAiSettings: AiSettingsView = {
@@ -277,7 +279,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 function importQuery(range: ImportRangeSelection): string {
   const query = new URLSearchParams();
-  if (range.startRow !== undefined) query.set("startRow", String(range.startRow));
+  if (range.startRow !== undefined)
+    query.set("startRow", String(range.startRow));
   if (range.endRow !== undefined) query.set("endRow", String(range.endRow));
   const text = query.toString();
   return text ? `?${text}` : "";
@@ -420,12 +423,20 @@ export const apiClient = {
       if (tailNoteTemplate !== undefined) {
         task.tailNoteTemplate = tailNoteTemplate;
       }
-      task.tailNote = renderTailNotePreview(articleKeyword, tailNoteTemplate ?? task.tailNoteTemplate);
+      task.tailNote = renderTailNotePreview(
+        articleKeyword,
+        tailNoteTemplate ?? task.tailNoteTemplate,
+      );
       task.updatedAt = new Date().toISOString();
       return mockDelay({ ...task });
     }
 
-    if (window.desktop) return window.desktop.updateKeyword(taskId, articleKeyword, tailNoteTemplate);
+    if (window.desktop)
+      return window.desktop.updateKeyword(
+        taskId,
+        articleKeyword,
+        tailNoteTemplate,
+      );
 
     const body: Record<string, string> = { articleKeyword };
     if (tailNoteTemplate !== undefined) {
@@ -651,6 +662,8 @@ export const apiClient = {
     fullContentOutput?: boolean;
     videoMode?: "slide" | "scroll";
     scrollSpeed?: number;
+    imageExportRatio?: "9:16" | "3:4";
+    hideInteractionButtons?: boolean;
   }): Promise<ProcessingSettings> {
     if (useMockApi) {
       mockProcessing = { ...mockProcessing, ...patch };
@@ -695,6 +708,10 @@ export const apiClient = {
 
   getBatchVideosDownloadUrl(batchId: string): string {
     return `${apiBaseUrl}/api/batches/${batchId}/download-videos`;
+  },
+
+  getBatchImagesDownloadUrl(batchId: string): string {
+    return `${apiBaseUrl}/api/batches/${batchId}/download-images`;
   },
 
   getResultWorkbookUrl(batchId: string): string {

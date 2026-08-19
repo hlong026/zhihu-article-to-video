@@ -3,10 +3,12 @@ import { useEffect, useState } from "react";
 import {
   bodyPageDurationOptions,
   coverPageDurationOptions,
+  imageExportRatios,
   processingConcurrencyOptions,
   scrollSpeedDefault,
   scrollSpeedMax,
   scrollSpeedMin,
+  type ImageExportRatio,
   type ProcessingSettings,
   type VideoMode,
 } from "@zhihu-video/contracts";
@@ -32,9 +34,7 @@ export function ProcessingSettingsCard({
         setLocalScrollSpeed(next.scrollSpeed);
       })
       .catch((error: unknown) =>
-        onNotice(
-          error instanceof Error ? error.message : "读取处理设置失败。",
-        ),
+        onNotice(error instanceof Error ? error.message : "读取处理设置失败。"),
       );
   }, [onNotice]);
 
@@ -71,7 +71,7 @@ export function ProcessingSettingsCard({
           <p className="eyebrow" id="processing-card-title">
             批量处理设置
           </p>
-          <strong>并发 · 页时长 · 视频模式 · 输出范围</strong>
+          <strong>并发 · 页时长 · 视频模式 · 图片选项</strong>
           <span>对之后启动或重试的任务生效；知乎抓取始终串行限流。</span>
         </div>
       </div>
@@ -117,7 +117,9 @@ export function ProcessingSettingsCard({
             ))}
           </select>
           {isScrollMode ? (
-            <span className="processing-toggle-hint">上下滚动模式下由滚动速度决定时长</span>
+            <span className="processing-toggle-hint">
+              上下滚动模式下由滚动速度决定时长
+            </span>
           ) : null}
         </label>
 
@@ -141,31 +143,35 @@ export function ProcessingSettingsCard({
             ))}
           </select>
           {isScrollMode ? (
-            <span className="processing-toggle-hint">上下滚动模式下由滚动速度决定时长</span>
+            <span className="processing-toggle-hint">
+              上下滚动模式下由滚动速度决定时长
+            </span>
           ) : null}
         </label>
 
         <div className="processing-field">
           <span className="processing-field-label">视频模式</span>
           <div className="processing-mode-group">
-            {(["slide", "scroll"] as const satisfies VideoMode[]).map((mode) => (
-              <button
-                key={mode}
-                type="button"
-                className={`processing-mode-chip${settings.videoMode === mode ? " active" : ""}`}
-                disabled={isBusy}
-                onClick={() =>
-                  savePatch(
-                    { videoMode: mode },
-                    mode === "slide"
-                      ? "已切换为左右滑动模式。"
-                      : "已切换为上下滚动模式。",
-                  )
-                }
-              >
-                {mode === "slide" ? "左右滑动" : "上下滚动"}
-              </button>
-            ))}
+            {(["slide", "scroll"] as const satisfies VideoMode[]).map(
+              (mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  className={`processing-mode-chip${settings.videoMode === mode ? " active" : ""}`}
+                  disabled={isBusy}
+                  onClick={() =>
+                    savePatch(
+                      { videoMode: mode },
+                      mode === "slide"
+                        ? "已切换为左右滑动模式。"
+                        : "已切换为上下滚动模式。",
+                    )
+                  }
+                >
+                  {mode === "slide" ? "左右滑动" : "上下滚动"}
+                </button>
+              ),
+            )}
           </div>
         </div>
 
@@ -181,9 +187,14 @@ export function ProcessingSettingsCard({
               step={1}
               value={localScrollSpeed ?? settings.scrollSpeed}
               disabled={isBusy}
-              onChange={(event) => setLocalScrollSpeed(Number(event.target.value))}
+              onChange={(event) =>
+                setLocalScrollSpeed(Number(event.target.value))
+              }
               onPointerUp={() => {
-                if (localScrollSpeed !== null && localScrollSpeed !== settings.scrollSpeed) {
+                if (
+                  localScrollSpeed !== null &&
+                  localScrollSpeed !== settings.scrollSpeed
+                ) {
                   savePatch(
                     { scrollSpeed: localScrollSpeed },
                     `滚动速度已调整为 ${localScrollSpeed}。`,
@@ -191,7 +202,10 @@ export function ProcessingSettingsCard({
                 }
               }}
               onKeyUp={() => {
-                if (localScrollSpeed !== null && localScrollSpeed !== settings.scrollSpeed) {
+                if (
+                  localScrollSpeed !== null &&
+                  localScrollSpeed !== settings.scrollSpeed
+                ) {
                   savePatch(
                     { scrollSpeed: localScrollSpeed },
                     `滚动速度已调整为 ${localScrollSpeed}。`,
@@ -230,11 +244,63 @@ export function ProcessingSettingsCard({
               : "正文最多 10 页，超出部分以省略号截断"}
           </span>
         </div>
+
+        <div className="processing-field">
+          <span className="processing-field-label">图片下载比例</span>
+          <div className="processing-mode-group">
+            {(imageExportRatios as readonly ImageExportRatio[]).map((ratio) => (
+              <button
+                key={ratio}
+                type="button"
+                className={`processing-mode-chip${settings.imageExportRatio === ratio ? " active" : ""}`}
+                disabled={isBusy}
+                onClick={() =>
+                  savePatch(
+                    { imageExportRatio: ratio },
+                    `图片下载比例已切换为 ${ratio}。`,
+                  )
+                }
+              >
+                {ratio === "9:16" ? "9:16 竖版" : "3:4"}
+              </button>
+            ))}
+          </div>
+          <span className="processing-toggle-hint">
+            仅影响下载的图片，视频固定 9:16；3:4 将按需重新渲染。
+          </span>
+        </div>
+
+        <div className="processing-field processing-toggle-field">
+          <span className="processing-field-label">隐藏关注/点赞按钮</span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={settings.hideInteractionButtons}
+            className={`processing-toggle${settings.hideInteractionButtons ? " is-on" : ""}`}
+            disabled={isBusy}
+            onClick={() =>
+              savePatch(
+                { hideInteractionButtons: !settings.hideInteractionButtons },
+                settings.hideInteractionButtons
+                  ? "已恢复显示关注/点赞按钮。"
+                  : "已隐藏关注/点赞按钮，下载时按此设置重新渲染。",
+              )
+            }
+          >
+            <i className="processing-toggle-knob" />
+          </button>
+          <span className="processing-toggle-hint">
+            {settings.hideInteractionButtons
+              ? "隐藏卡片上的关注/点赞装饰，作者信息保留"
+              : "显示卡片上的关注/点赞装饰按钮"}
+          </span>
+        </div>
       </div>
 
       {settings.concurrency >= 15 ? (
         <p className="processing-warning" role="note">
-          高并发会同时运行多个渲染进程，CPU 与内存占用明显上升；若机器卡顿请调低档位。
+          高并发会同时运行多个渲染进程，CPU
+          与内存占用明显上升；若机器卡顿请调低档位。
         </p>
       ) : null}
     </section>

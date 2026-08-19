@@ -64,7 +64,11 @@ export interface DesktopApi {
     range?: ImportRange,
   ): Promise<BatchDetail>;
   startBatch(batchId: string): Promise<BatchDetail>;
-  updateKeyword(taskId: string, articleKeyword: string, tailNoteTemplate?: string): Promise<ArticleTask>;
+  updateKeyword(
+    taskId: string,
+    articleKeyword: string,
+    tailNoteTemplate?: string,
+  ): Promise<ArticleTask>;
   rerenderTail(taskId: string): Promise<ArticleTask>;
   saveManualContent(
     taskId: string,
@@ -72,13 +76,16 @@ export interface DesktopApi {
   ): Promise<ArticleTask>;
   retryTask(taskId: string): Promise<ArticleTask>;
   deleteTask(taskId: string): Promise<{ ok: boolean }>;
-  batchDeleteTasks(taskIds: string[]): Promise<{ ok: boolean; deletedCount: number }>;
+  batchDeleteTasks(
+    taskIds: string[],
+  ): Promise<{ ok: boolean; deletedCount: number }>;
   deleteBatch(batchId: string): Promise<{ ok: boolean }>;
   taskPreviewImage(taskId: string): Promise<BgmPreviewAsset>;
   downloadVideo(taskId: string): Promise<DownloadedAsset>;
   downloadImages(taskId: string): Promise<DownloadedAsset>;
   downloadBatch(batchId: string): Promise<DownloadedAsset>;
   downloadBatchVideos(batchId: string): Promise<DownloadedAsset>;
+  downloadBatchImages(batchId: string): Promise<DownloadedAsset>;
   downloadResultWorkbook(batchId: string): Promise<DownloadedAsset>;
   getBgm(): Promise<BgmSettingsView>;
   updateBgm(patch: BgmPatch): Promise<BgmSettingsView>;
@@ -86,7 +93,9 @@ export interface DesktopApi {
   previewBgm(): Promise<BgmPreviewAsset>;
   clearBgm(): Promise<BgmSettingsView>;
   getProcessing(): Promise<ProcessingSettings>;
-  updateProcessing(patch: Partial<ProcessingSettings>): Promise<ProcessingSettings>;
+  updateProcessing(
+    patch: Partial<ProcessingSettings>,
+  ): Promise<ProcessingSettings>;
   close(): Promise<void>;
 }
 
@@ -188,7 +197,9 @@ export async function createDesktopApi(options: {
         headers: { "content-type": "application/json" },
         payload: JSON.stringify({
           articleKeyword,
-          ...(tailNoteTemplate !== undefined ? { tailNote: tailNoteTemplate } : {}),
+          ...(tailNoteTemplate !== undefined
+            ? { tailNote: tailNoteTemplate }
+            : {}),
         }),
       }),
     rerenderTail: (taskId) =>
@@ -226,7 +237,10 @@ export async function createDesktopApi(options: {
         url: `/api/batches/${encodeURIComponent(batchId)}`,
       }),
     taskPreviewImage: (taskId) =>
-      streamAsset(app, `/api/tasks/${encodeURIComponent(taskId)}/preview-image`),
+      streamAsset(
+        app,
+        `/api/tasks/${encodeURIComponent(taskId)}/preview-image`,
+      ),
     downloadVideo: (taskId) =>
       downloadAsset(
         app,
@@ -246,6 +260,11 @@ export async function createDesktopApi(options: {
       downloadAsset(
         app,
         `/api/batches/${encodeURIComponent(batchId)}/download-videos`,
+      ),
+    downloadBatchImages: (batchId) =>
+      downloadAsset(
+        app,
+        `/api/batches/${encodeURIComponent(batchId)}/download-images`,
       ),
     downloadResultWorkbook: (batchId) =>
       downloadAsset(
@@ -305,7 +324,9 @@ async function downloadAsset(
 ): Promise<DownloadedAsset> {
   const response = await app.inject({ method: "GET", url });
   if (response.statusCode < 200 || response.statusCode >= 300) {
-    const payload = response.body ? (JSON.parse(response.body) as unknown) : null;
+    const payload = response.body
+      ? (JSON.parse(response.body) as unknown)
+      : null;
     const message = isErrorPayload(payload)
       ? payload.message
       : "成品下载失败。";
@@ -324,8 +345,12 @@ async function streamAsset(
 ): Promise<BgmPreviewAsset> {
   const response = await app.inject({ method: "GET", url });
   if (response.statusCode < 200 || response.statusCode >= 300) {
-    const payload = response.body ? (JSON.parse(response.body) as unknown) : null;
-    const message = isErrorPayload(payload) ? payload.message : "读取预览失败。";
+    const payload = response.body
+      ? (JSON.parse(response.body) as unknown)
+      : null;
+    const message = isErrorPayload(payload)
+      ? payload.message
+      : "读取预览失败。";
     throw new Error(message);
   }
   const contentType = response.headers["content-type"];

@@ -240,6 +240,8 @@ describe("processing settings API", () => {
     fullContentOutput: false,
     videoMode: "slide",
     scrollSpeed: 3,
+    imageExportRatio: "9:16",
+    hideInteractionButtons: false,
   };
 
   it("reads the defaults and persists an allowed preset", async () => {
@@ -293,6 +295,40 @@ describe("processing settings API", () => {
       bodyPageDurationSeconds: 5,
       fullContentOutput: true,
     });
+    await app.close();
+  });
+
+  it("persists the image export ratio and button visibility", async () => {
+    const app = buildApp({ databasePath: ":memory:" });
+
+    const updated = await app.inject({
+      method: "PUT",
+      url: "/api/settings/processing",
+      payload: { imageExportRatio: "3:4", hideInteractionButtons: true },
+    });
+    expect(updated.statusCode).toBe(200);
+    expect(updated.json()).toEqual({
+      ...defaults,
+      imageExportRatio: "3:4",
+      hideInteractionButtons: true,
+    });
+
+    const reread = await app.inject({
+      method: "GET",
+      url: "/api/settings/processing",
+    });
+    expect(reread.json()).toEqual({
+      ...defaults,
+      imageExportRatio: "3:4",
+      hideInteractionButtons: true,
+    });
+
+    const rejected = await app.inject({
+      method: "PUT",
+      url: "/api/settings/processing",
+      payload: { imageExportRatio: "16:9" },
+    });
+    expect(rejected.statusCode).toBe(400);
     await app.close();
   });
 
