@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
+import { createWriteStream, existsSync } from "node:fs";
 import {
   cp,
   mkdir,
@@ -11,7 +11,7 @@ import {
 } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 
 const require = createRequire(import.meta.url);
@@ -95,6 +95,87 @@ function argValue(name) {
   const prefix = `${name}=`;
   const hit = process.argv.slice(2).find((arg) => arg.startsWith(prefix));
   return hit ? hit.slice(prefix.length) : undefined;
+}
+
+/** 下载连接停滞多久判定为死连接（毫秒）。 */
+const DOWNLOAD_IDLE_TIMEOUT_MS = 90_000;
+
+function formatBytes(bytes) {
+  return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+}
+
+/**
+ * 带空闲超时、重试与进度日志的文件下载。裸 fetch 在连接停滞时会把整个
+ * 打包进程无限挂起（CI 上曾因此烧满 6 小时运行上限），必须收敛为可失败、
+ * 可重试。流式落盘，避免大文件（FFmpeg ~180MB）整体读入内存。
+ */
+async function downloadFile(url, destination, { label, attempts = 4 } = {}) {
+  const description = label ?? url;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const controller = new AbortController();
+    const onIdle = () => {
+      controller.abort(
+        new Error(`连接停滞超过 ${DOWNLOAD_IDLE_TIMEOUT_MS / 1000}s`),
+      );
+    };
+    let idleTimer = setTimeout(onIdle, DOWNLOAD_IDLE_TIMEOUT_MS);
+    const bumpIdleTimer = () => {
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(onIdle, DOWNLOAD_IDLE_TIMEOUT_MS);
+    };
+    try {
+      if (attempt > 1) {
+        console.log(`重试下载 ${description}（第 ${attempt}/${attempts} 次）…`);
+      }
+      const response = await fetch(url, { signal: controller.signal });
+      if (!response.ok) {
+        const error = new Error(`HTTP ${response.status}`);
+        // 4xx 是确定性失败（链接失效等），重试无意义。
+        if (response.status >= 400 && response.status < 500) {
+          error.fatal = true;
+        }
+        throw error;
+      }
+      const totalBytes = Number(response.headers.get("content-length") ?? 0);
+      const reader = response.body.getReader();
+      const output = createWriteStream(destination);
+      let receivedBytes = 0;
+      let lastReportAt = Date.now();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        bumpIdleTimer();
+        await new Promise((resolve, reject) => {
+          output.write(value, (error) => (error ? reject(error) : resolve()));
+        });
+        receivedBytes += value.byteLength;
+        if (Date.now() - lastReportAt >= 5_000) {
+          const totalLabel = totalBytes ? ` / ${formatBytes(totalBytes)}` : "";
+          console.log(
+            `  ${description}：已下载 ${formatBytes(receivedBytes)}${totalLabel}`,
+          );
+          lastReportAt = Date.now();
+        }
+      }
+      await new Promise((resolve, reject) =>
+        output.end((error) => (error ? reject(error) : resolve())),
+      );
+      return;
+    } catch (error) {
+      await rm(destination, { force: true });
+      if (error?.fatal || attempt === attempts) {
+        throw new Error(
+          `下载 ${description} 失败（${error?.message ?? error}）：${url}`,
+        );
+      }
+      console.warn(
+        `下载 ${description} 失败（${error?.message ?? error}），稍后重试…`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, attempt * 3_000));
+    } finally {
+      clearTimeout(idleTimer);
+    }
+  }
 }
 
 const targetPlatform = argValue("--platform") ?? process.platform;
@@ -300,18 +381,13 @@ async function prepareNativeModules() {
     `v${SQLITE_PREBUILD_RELEASE}/` +
     `better-sqlite3-v${SQLITE_PREBUILD_RELEASE}-electron-v${abi}-` +
     `${targetPlatform}-${targetArch}.tar.gz`;
-  console.log(`下载 better-sqlite3 预编译二进制（Electron ABI ${abi}）…`);
   const tarballPath = join(
     stageRoot,
     `better-sqlite3-electron-v${abi}-${targetPlatform}-${targetArch}.tar.gz`,
   );
-  const response = await fetch(prebuildUrl);
-  if (!response.ok) {
-    throw new Error(
-      `下载 better-sqlite3 预编译二进制失败（${response.status}）：${prebuildUrl}`,
-    );
-  }
-  await writeFile(tarballPath, Buffer.from(await response.arrayBuffer()));
+  await downloadFile(prebuildUrl, tarballPath, {
+    label: "better-sqlite3 预编译二进制",
+  });
   await run("tar", ["-xzf", tarballPath, "-C", stagedSqlite]);
   await rm(tarballPath, { force: true });
   await replaceSharpPrebuilds();
@@ -331,14 +407,7 @@ async function replaceSharpPrebuilds() {
     `https://registry.npmjs.org/@img/${packageName}/-/` +
     `${packageName}-${sharpManifest.version}.tgz`;
   const tarballPath = join(stageRoot, `${packageName}.tgz`);
-  console.log(`下载 @img/${packageName}@${sharpManifest.version}…`);
-  const response = await fetch(tarballUrl);
-  if (!response.ok) {
-    throw new Error(
-      `下载 sharp 预编译包失败（${response.status}）：${tarballUrl}`,
-    );
-  }
-  await writeFile(tarballPath, Buffer.from(await response.arrayBuffer()));
+  await downloadFile(tarballUrl, tarballPath, { label: `@img/${packageName}` });
   const targetDirectory = join(imgDirectory, packageName);
   await rm(targetDirectory, { recursive: true, force: true });
   await mkdir(targetDirectory, { recursive: true });
@@ -360,6 +429,16 @@ async function replaceSharpPrebuilds() {
 
 /** 下载并解压目标平台的 Electron 官方预构建运行时（带本地缓存）。 */
 async function ensureElectronDist(platform, arch) {
+  // 同平台构建时 pnpm install 已把 Electron 运行时装进 node_modules，
+  // 直接复用，避免 CI 上再走一遍 ~110MB 的压缩包下载。
+  const localMarker = join(
+    electronDist,
+    platform === "win32" ? "electron.exe" : "Electron.app",
+  );
+  if (platform === process.platform && existsSync(localMarker)) {
+    console.log(`复用 node_modules 内的 Electron ${platform}-${arch} 运行时。`);
+    return electronDist;
+  }
   const cacheDirectory = join(stageRoot, `electron-${platform}-${arch}`);
   const marker = join(
     cacheDirectory,
@@ -424,11 +503,16 @@ async function patchInfoPlist(targetApp) {
   }
   if (existsSync(iconIcns)) {
     // 拷入自定义图标并让 Info.plist 指向它（值不含 .icns 扩展名）。
-    await cp(iconIcns, join(targetApp, "Contents", "Resources", "AppIcon.icns"));
+    await cp(
+      iconIcns,
+      join(targetApp, "Contents", "Resources", "AppIcon.icns"),
+    );
     await setPlistValue(plist, "CFBundleIconFile", "AppIcon");
     await setPlistValue(plist, "CFBundleIconName", "AppIcon");
   } else {
-    console.warn("缺少 resources/icon.icns，macOS 应用沿用 Electron 默认图标。");
+    console.warn(
+      "缺少 resources/icon.icns，macOS 应用沿用 Electron 默认图标。",
+    );
   }
 }
 
@@ -618,9 +702,12 @@ async function buildWindowsInstaller(targetDirectory) {
 async function verifyWindowsInstaller(installerPath) {
   const installDirectory = join(stageRoot, "verify-install");
   await rm(installDirectory, { recursive: true, force: true });
+  // 校验类子进程必须带硬超时：曾因卸载器静默模式下弹窗等待点击，
+  // 在 CI 无人值守会话里挂满 6 小时运行上限。
   // NSIS 静默安装：/S 配合 /D 指定目录，/D 必须置末且不带引号。
   await run(installerPath, ["/S", `/D=${installDirectory}`], {
     maxBuffer: 8 * 1024 * 1024,
+    timeout: 10 * 60 * 1000,
   });
   const installedExe = join(installDirectory, `${productName}.exe`);
   if (!existsSync(installedExe)) {
@@ -632,6 +719,7 @@ async function verifyWindowsInstaller(installerPath) {
     // _?= 使卸载器同步就地运行（不拷到临时目录），便于随后清理。
     await run(uninstaller, ["/S", `_?=${installDirectory}`], {
       maxBuffer: 8 * 1024 * 1024,
+      timeout: 5 * 60 * 1000,
     });
   }
   await rm(installDirectory, { recursive: true, force: true });
@@ -685,11 +773,30 @@ async function archiveWindowsOutput(targetDirectory) {
   if (process.platform === "darwin") {
     await run("ditto", ["-c", "-k", "--keepParent", targetDirectory, zipPath]);
   } else {
-    await run("powershell", [
-      "-NoProfile",
-      "-Command",
-      `Compress-Archive -LiteralPath '${targetDirectory}' -DestinationPath '${zipPath}'`,
-    ]);
+    // 应用内含 Chromium/FFmpeg（>1GB、上万小文件），PowerShell 的
+    // Compress-Archive 处理这种树极慢；Windows 10+ 自带 bsdtar，按
+    // 扩展名自动产 zip，快一个数量级。失败再退回 PowerShell。
+    try {
+      await run(
+        "tar",
+        [
+          "-a",
+          "-c",
+          "-f",
+          zipPath,
+          "-C",
+          dirname(targetDirectory),
+          basename(targetDirectory),
+        ],
+        { maxBuffer: 16 * 1024 * 1024 },
+      );
+    } catch {
+      await run("powershell", [
+        "-NoProfile",
+        "-Command",
+        `Compress-Archive -LiteralPath '${targetDirectory}' -DestinationPath '${zipPath}'`,
+      ]);
+    }
   }
   console.log(`已生成 Windows 应用目录：${targetDirectory}`);
   console.log(`已生成 Windows 压缩包：${zipPath}`);
@@ -712,7 +819,9 @@ async function addApplicationResources(applicationDirectory) {
   if (!skipBrowser) {
     await bundlePlaywrightBrowser(applicationDirectory);
   } else {
-    console.log("跳过内置 Chromium（--skip-browser），运行时将使用本机浏览器。");
+    console.log(
+      "跳过内置 Chromium（--skip-browser），运行时将使用本机浏览器。",
+    );
   }
   if (!skipFfmpeg) {
     await bundleFfmpeg(applicationDirectory);
@@ -749,7 +858,9 @@ async function chromiumRevision() {
   }
   const overrides = chromium.revisionOverrides ?? {};
   if (!chromium.browserVersion) {
-    throw new Error("playwright-core browsers.json 中缺少 chromium browserVersion。");
+    throw new Error(
+      "playwright-core browsers.json 中缺少 chromium browserVersion。",
+    );
   }
   return {
     revision:
@@ -853,14 +964,15 @@ async function installChromiumViaPlaywrightCli(browsersPath) {
   console.log("下载 Playwright Chromium（首次较慢，之后复用本地缓存）…");
   // --no-shell：reader 无头与可见模式都走同一个完整 Chromium，
   // 无需再下载 chromium-headless-shell（省约 100MB）。
-  await run(
-    process.execPath,
-    [cliPath, "install", "chromium", "--no-shell"],
-    {
-      env: { ...process.env, PLAYWRIGHT_BROWSERS_PATH: browsersPath },
-      maxBuffer: 16 * 1024 * 1024,
+  await run(process.execPath, [cliPath, "install", "chromium", "--no-shell"], {
+    env: {
+      ...process.env,
+      PLAYWRIGHT_BROWSERS_PATH: browsersPath,
+      // 连接超时（毫秒），默认 30s 对 CI 冷启动偏紧。
+      PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT: "120000",
     },
-  );
+    maxBuffer: 16 * 1024 * 1024,
+  });
 }
 
 /** 交叉打包（macOS → Windows）：直接拉取 Playwright CDN 压缩包解压。 */
@@ -873,12 +985,9 @@ async function downloadChromiumArchive(browserVersion, targetDirectory) {
   }
   const url = `${PLAYWRIGHT_DOWNLOAD_HOST}/builds/cft/${browserVersion}/${archivePath}`;
   const archiveFile = join(stageRoot, archivePath.split("/").at(-1));
-  console.log(`下载 Chrome for Testing ${browserVersion}（${archivePath}）…`);
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`下载 Chromium 失败（${response.status}）：${url}`);
-  }
-  await writeFile(archiveFile, Buffer.from(await response.arrayBuffer()));
+  await downloadFile(url, archiveFile, {
+    label: `Chrome for Testing ${browserVersion}`,
+  });
   if (process.platform === "darwin") {
     await run("ditto", ["-x", "-k", archiveFile, targetDirectory]);
   } else {
@@ -925,17 +1034,11 @@ async function ensureFfmpeg() {
       return cachedBinary;
     }
     const url = `${FFMPEG_DARWIN_RELEASE}/ffmpeg-darwin-${targetArch}`;
-    console.log(`下载 FFmpeg 静态构建（${platformArch}）…`);
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`下载 FFmpeg 失败（${response.status}）：${url}`);
-    }
     await rm(cacheDirectory, { recursive: true, force: true });
     await mkdir(cacheDirectory, { recursive: true });
-    await writeFile(
-      cachedBinary,
-      Buffer.from(await response.arrayBuffer()),
-    );
+    await downloadFile(url, cachedBinary, {
+      label: `FFmpeg 静态构建（${platformArch}）`,
+    });
     await run("chmod", ["+x", cachedBinary]);
     return cachedBinary;
   }
@@ -953,12 +1056,9 @@ async function ensureFfmpeg() {
   await mkdir(cacheDirectory, { recursive: true });
   const url = `${FFMPEG_RELEASE_BASE}/${archiveName}`;
   const archivePath = join(stageRoot, archiveName);
-  console.log(`下载 FFmpeg 静态构建（${archiveName}）…`);
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`下载 FFmpeg 失败（${response.status}）：${url}`);
-  }
-  await writeFile(archivePath, Buffer.from(await response.arrayBuffer()));
+  await downloadFile(url, archivePath, {
+    label: `FFmpeg 静态构建（${archiveName}）`,
+  });
   if (process.platform === "darwin") {
     await run("ditto", ["-x", "-k", archivePath, cacheDirectory]);
   } else {
@@ -981,8 +1081,7 @@ async function bundleFfmpeg(applicationDirectory) {
   const targetDirectory = join(applicationDirectory, "api", "ffmpeg");
   await rm(targetDirectory, { recursive: true, force: true });
   await mkdir(targetDirectory, { recursive: true });
-  const binaryName =
-    targetPlatform === "win32" ? "ffmpeg.exe" : "ffmpeg";
+  const binaryName = targetPlatform === "win32" ? "ffmpeg.exe" : "ffmpeg";
   await cp(ffmpegBinary, join(targetDirectory, binaryName));
   await writeFile(
     join(targetDirectory, "manifest.json"),
