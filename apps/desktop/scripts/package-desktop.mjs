@@ -67,24 +67,28 @@ const CHROMIUM_ARCHIVE_PATH = {
 
 /**
  * 内置 FFmpeg 静态构建：用户无需自行安装 FFmpeg。
- * 使用 BtbN 的 GPL 构建（开箱即用、codec 全、无外部依赖）。
+ * Windows 使用 BtbN 的 GPL 构建（开箱即用、codec 全、无外部依赖）。
  * 下载产物缓存在 .stage/ffmpeg，重复打包不重复下载。
  */
 const FFMPEG_RELEASE_BASE =
   process.env.FFMPEG_DOWNLOAD_BASE ??
   "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest";
 
+/**
+ * BtbN 只发布 Windows/Linux 构建，macOS 改用 eugeneware/ffmpeg-static
+ * 的官方静态二进制（裸可执行文件，下载后无需解压，b6.0 = FFmpeg 6.0）。
+ */
+const FFMPEG_DARWIN_RELEASE =
+  process.env.FFMPEG_DARWIN_DOWNLOAD_BASE ??
+  "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.0";
+
 const FFMPEG_ARCHIVE_NAME = {
   "win32-x64": "ffmpeg-master-latest-win64-gpl.zip",
-  "darwin-x64": "ffmpeg-master-latest-macos64-gpl.zip",
-  "darwin-arm64": "ffmpeg-master-latest-macos-arm64-gpl.zip",
 };
 
 /** 解压后 ffmpeg 二进制在压缩包内的相对路径（BtbN 包带顶层目录）。 */
 const FFMPEG_BINARY_IN_ARCHIVE = {
   "win32-x64": "ffmpeg-master-latest-win64-gpl/bin/ffmpeg.exe",
-  "darwin-x64": "ffmpeg-master-latest-macos64-gpl/bin/ffmpeg",
-  "darwin-arm64": "ffmpeg-master-latest-macos-arm64-gpl/bin/ffmpeg",
 };
 
 function argValue(name) {
@@ -256,6 +260,22 @@ async function patchPipelineExports() {
 
 async function prepareNativeModules() {
   const stagedSqlite = join(apiDeployment, "node_modules", "better-sqlite3");
+  // better-sqlite3 13+ 随包分发全平台 N-API 预编译（prebuilds/<platform>-<arch>.node，
+  // 同一二进制在 Node 与 Electron 下通用），deploy 副本自带目标平台产物，
+  // 无需 electron-rebuild 覆盖或下载 Electron ABI 预编译。
+  if (
+    existsSync(
+      join(stagedSqlite, "prebuilds", `${targetPlatform}-${targetArch}.node`),
+    )
+  ) {
+    console.log(
+      `复用 better-sqlite3 内置 N-API 预编译（${targetPlatform}-${targetArch}）。`,
+    );
+    if (targetPlatform !== process.platform) {
+      await replaceSharpPrebuilds();
+    }
+    return;
+  }
   if (targetPlatform === process.platform) {
     // 与宿主同平台：rebuild-native 已按 Electron ABI 重建工作区副本，
     // deploy 从内容寻址仓库克隆的仍是 Node ABI 二进制，需要覆盖。
@@ -896,12 +916,34 @@ async function bundlePlaywrightBrowser(applicationDirectory) {
 /** 下载并缓存目标平台的 FFmpeg 静态构建，返回 ffmpeg 二进制路径。 */
 async function ensureFfmpeg() {
   const platformArch = `${targetPlatform}-${targetArch}`;
+  const cacheDirectory = join(stageRoot, "ffmpeg", platformArch);
+  if (targetPlatform === "darwin") {
+    // macOS：ffmpeg-static 提供裸可执行文件，下载后直接作为缓存二进制。
+    const cachedBinary = join(cacheDirectory, "ffmpeg");
+    if (existsSync(cachedBinary)) {
+      console.log(`复用已缓存的 FFmpeg（${platformArch}）。`);
+      return cachedBinary;
+    }
+    const url = `${FFMPEG_DARWIN_RELEASE}/ffmpeg-darwin-${targetArch}`;
+    console.log(`下载 FFmpeg 静态构建（${platformArch}）…`);
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`下载 FFmpeg 失败（${response.status}）：${url}`);
+    }
+    await rm(cacheDirectory, { recursive: true, force: true });
+    await mkdir(cacheDirectory, { recursive: true });
+    await writeFile(
+      cachedBinary,
+      Buffer.from(await response.arrayBuffer()),
+    );
+    await run("chmod", ["+x", cachedBinary]);
+    return cachedBinary;
+  }
   const archiveName = FFMPEG_ARCHIVE_NAME[platformArch];
   const binaryInArchive = FFMPEG_BINARY_IN_ARCHIVE[platformArch];
   if (!archiveName || !binaryInArchive) {
     throw new Error(`缺少 ${platformArch} 的 FFmpeg 压缩包映射。`);
   }
-  const cacheDirectory = join(stageRoot, "ffmpeg", platformArch);
   const cachedBinary = join(cacheDirectory, binaryInArchive);
   if (existsSync(cachedBinary)) {
     console.log(`复用已缓存的 FFmpeg（${platformArch}）。`);
