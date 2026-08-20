@@ -56,24 +56,30 @@ jobs:
             Add-Content $env:GITHUB_PATH $preinstalled
             Write-Host "NSIS 已加入 PATH"
           } else {
-            # windows-latest 镜像已不预装 NSIS；choco 的 community feed
-            # 曾持续 503 导致静默跳过安装器，改为直接解压 SourceForge
-            # 官方便携压缩包（约 4MB，确定性来源）。
+            # windows-latest 镜像已不预装 NSIS；choco 的 community feed 曾持续
+            # 503。Expand-Archive 在 runner 的 pwsh 7 上有 .NET 类型加载故障，
+            # 改用系统 curl.exe + bsdtar 解压 SourceForge 官方便携压缩包。
             $version = "3.12"
             $installDir = Join-Path $env:RUNNER_TEMP "nsis"
             $zipPath = Join-Path $env:RUNNER_TEMP "nsis.zip"
-            Invoke-WebRequest -Uri "https://downloads.sourceforge.net/nsis/nsis-$version.zip" -OutFile $zipPath
-            Expand-Archive -LiteralPath $zipPath -DestinationPath $installDir
-            $makensis = Join-Path $installDir "makensis.exe"
-            if (-not (Test-Path $makensis)) {
-              $nested = Get-ChildItem -Path $installDir -Filter "makensis.exe" -Recurse | Select-Object -First 1
-              if ($nested) { $installDir = Split-Path $nested.FullName } else {
-                Write-Error "NSIS 解压后未找到 makensis.exe，无法生成安装器。"
-                exit 1
-              }
+            New-Item -ItemType Directory -Force $installDir | Out-Null
+            curl.exe -fSL --retry 3 --retry-delay 2 -o $zipPath "https://downloads.sourceforge.net/nsis/nsis-$version.zip"
+            if ($LASTEXITCODE -ne 0) {
+              Write-Error "NSIS 压缩包下载失败（curl 退出码 $LASTEXITCODE）。"
+              exit 1
             }
-            Add-Content $env:GITHUB_PATH $installDir
-            Write-Host "已便携安装 NSIS $version 并加入 PATH：$installDir"
+            tar -xf $zipPath -C $installDir
+            if ($LASTEXITCODE -ne 0) {
+              Write-Error "NSIS 压缩包解压失败（tar 退出码 $LASTEXITCODE）。"
+              exit 1
+            }
+            $makensis = Get-ChildItem -Path $installDir -Filter "makensis.exe" -Recurse | Select-Object -First 1
+            if (-not $makensis) {
+              Write-Error "NSIS 解压后未找到 makensis.exe，无法生成安装器。"
+              exit 1
+            }
+            Add-Content $env:GITHUB_PATH $makensis.DirectoryName
+            Write-Host "已便携安装 NSIS $version 并加入 PATH：$($makensis.DirectoryName)"
           }
 
       - name: 打包
