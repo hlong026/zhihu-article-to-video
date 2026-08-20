@@ -47,18 +47,33 @@ jobs:
       - name: 安装依赖
         run: pnpm install --frozen-lockfile --prod=false
 
-      - name: 将 NSIS 加入 PATH（Windows）
+      - name: 安装 NSIS（Windows）
         if: matrix.platform == 'windows'
         shell: pwsh
         run: |
-          $nsisDir = "C:\Program Files (x86)\NSIS"
-          if (Test-Path $nsisDir) {
-            Add-Content $env:GITHUB_PATH $nsisDir
+          $preinstalled = "C:\Program Files (x86)\NSIS"
+          if (Test-Path (Join-Path $preinstalled "makensis.exe")) {
+            Add-Content $env:GITHUB_PATH $preinstalled
             Write-Host "NSIS 已加入 PATH"
           } else {
-            Write-Host "未找到 NSIS 安装目录，尝试通过 choco 安装…"
-            choco install nsis -y --no-progress
-            Add-Content $env:GITHUB_PATH "C:\Program Files (x86)\NSIS"
+            # windows-latest 镜像已不预装 NSIS；choco 的 community feed
+            # 曾持续 503 导致静默跳过安装器，改为直接解压 SourceForge
+            # 官方便携压缩包（约 4MB，确定性来源）。
+            $version = "3.12"
+            $installDir = Join-Path $env:RUNNER_TEMP "nsis"
+            $zipPath = Join-Path $env:RUNNER_TEMP "nsis.zip"
+            Invoke-WebRequest -Uri "https://downloads.sourceforge.net/nsis/nsis-$version.zip" -OutFile $zipPath
+            Expand-Archive -LiteralPath $zipPath -DestinationPath $installDir
+            $makensis = Join-Path $installDir "makensis.exe"
+            if (-not (Test-Path $makensis)) {
+              $nested = Get-ChildItem -Path $installDir -Filter "makensis.exe" -Recurse | Select-Object -First 1
+              if ($nested) { $installDir = Split-Path $nested.FullName } else {
+                Write-Error "NSIS 解压后未找到 makensis.exe，无法生成安装器。"
+                exit 1
+              }
+            }
+            Add-Content $env:GITHUB_PATH $installDir
+            Write-Host "已便携安装 NSIS $version 并加入 PATH：$installDir"
           }
 
       - name: 打包
